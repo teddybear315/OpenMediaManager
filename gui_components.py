@@ -925,9 +925,13 @@ class PreEncodeSettingsDialog(QDialog):
         
         # Level
         self.level_combo = QComboBox()
-        self.level_combo.addItems(["3.0", "3.1", "4.0", "4.1", "5.0", "5.1", "5.2", "6.0", "6.1", "6.2"])
-        self.level_combo.setCurrentText(enc.get("level", "4.1"))
-        self.level_combo.setToolTip("Encoding level. Use 5.1+ for 4K content. 4.1 is safe for most 1080p content.")
+        self.level_combo.addItems(["Auto (ignore)", "3.0", "3.1", "4.0", "4.1", "5.0", "5.1", "5.2", "6.0", "6.1", "6.2"])
+        current_level = enc.get("level", "4.1")
+        if current_level and current_level.lower() != "auto":
+            self.level_combo.setCurrentText(current_level)
+        else:
+            self.level_combo.setCurrentText("Auto (ignore)")
+        self.level_combo.setToolTip("Encoding level. Use 5.1+ for 4K content. 4.1 is safe for most 1080p content. Auto skips level parameter.")
         encoding_layout.addRow("Level:", self.level_combo)
         
         # Bit depth preference
@@ -1216,7 +1220,13 @@ class PreEncodeSettingsDialog(QDialog):
         enc["tune_animation"] = self.animation_check.isChecked()
         enc["cq"] = self.cq_spin.value()
         enc["thread_count"] = self.thread_spin.value()
-        enc["level"] = self.level_combo.currentText()
+        
+        # Level - save as 'auto' if Auto is selected
+        level_text = self.level_combo.currentText()
+        if "Auto" in level_text or "ignore" in level_text:
+            enc["level"] = "auto"
+        else:
+            enc["level"] = level_text
         
         # Bit depth preference
         bit_depth_text = self.bit_depth_combo.currentText()
@@ -2948,6 +2958,9 @@ class MainWindow(QMainWindow):
             self.encoding_log_dialog.log_command(message)
         elif log_type == "error":
             self.encoding_log_dialog.log_error(message)
+        elif log_type == "ffmpeg_error":
+            # FFmpeg error/warning output - show in red/orange
+            self.encoding_log_dialog.log_message(f"⚠️ {message}", color if color else "#ff6b6b")
         else:
             # Generic message
             self.encoding_log_dialog.log_message(message, color if color else "#d4d4d4")
@@ -2962,6 +2975,7 @@ class MainWindow(QMainWindow):
         
         successful = sum(1 for job in self.encoder.jobs if job.status == "complete")
         failed = sum(1 for job in self.encoder.jobs if job.status == "failed")
+        cancelled = sum(1 for job in self.encoder.jobs if job.status == "cancelled")
         
         # Add completion summary to log dialog
         if hasattr(self, 'encoding_log_dialog') and self.encoding_log_dialog:
@@ -2973,6 +2987,43 @@ class MainWindow(QMainWindow):
             self.encoding_log_dialog.log_message(f"Successfully encoded: {successful} files", "#4caf50")
             if failed > 0:
                 self.encoding_log_dialog.log_message(f"Failed: {failed} files", "#ff4444")
+            if cancelled > 0:
+                self.encoding_log_dialog.log_message(f"Cancelled: {cancelled} files", "#ffa500")
+        
+        # If encoding was stopped/cancelled, offer to delete partial encoded files
+        if cancelled > 0:
+            # Count partial encoded files that exist
+            partial_files = [job for job in self.encoder.jobs if job.status == "cancelled" and job.output_path.exists()]
+            
+            if partial_files:
+                reply = QMessageBox.question(
+                    self, "Encoding Stopped",
+                    f"Encoding was stopped.\n\n"
+                    f"Successful: {successful}\n"
+                    f"Cancelled: {cancelled}\n"
+                    f"Failed: {failed}\n\n"
+                    f"Delete {len(partial_files)} partial encoded file(s)?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    deleted_count = 0
+                    for job in partial_files:
+                        try:
+                            job.output_path.unlink()
+                            deleted_count += 1
+                            print(f"[CLEANUP] Deleted partial file: {job.output_path}")
+                        except Exception as e:
+                            print(f"[ERROR] Failed to delete {job.output_path}: {e}")
+                    
+                    QMessageBox.information(
+                        self, "Cleanup Complete",
+                        f"Deleted {deleted_count} of {len(partial_files)} partial file(s)."
+                    )
+            
+            self.status_label.setText(f"Encoding stopped: {successful} successful, {cancelled} cancelled, {failed} failed")
+            return
         
         if successful == 0:
             QMessageBox.information(

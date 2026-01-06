@@ -311,9 +311,16 @@ class BatchEncoder(QObject):
             import sys
             
             try:
+                error_lines = []  # Collect error lines to send to log
                 for line in iter(process.stderr.readline, ''):
                     if not line:
                         break
+                    
+                    # Check for error/warning lines and log them
+                    line_lower = line.lower()
+                    if any(err in line_lower for err in ['error', 'failed', 'invalid', 'cannot', 'unable', 'not found', 'no such', 'warning']):
+                        error_lines.append(line.strip())
+                        self.log_signal.emit("ffmpeg_error", line.strip(), "#ff6b6b")
                     
                     if self.should_stop:
                         # Kill process immediately
@@ -477,7 +484,13 @@ class BatchEncoder(QObject):
                     self.job_complete.emit(job_index, False, job.error_message)
             else:
                 job.status = "failed"
-                job.error_message = f"FFmpeg exited with code {process.returncode}"
+                # Include captured error lines in the error message
+                if error_lines:
+                    error_summary = "; ".join(error_lines[-5:])  # Last 5 errors
+                    job.error_message = f"FFmpeg exited with code {process.returncode}: {error_summary}"
+                else:
+                    job.error_message = f"FFmpeg exited with code {process.returncode}"
+                self.log_signal.emit("error", job.error_message, "#ff6b6b")
                 self.job_complete.emit(job_index, False, job.error_message)
         
         except Exception as e:
@@ -626,10 +639,12 @@ class BatchEncoder(QObject):
             if bitrate_min and bitrate_max:
                 cmd.extend(['-b:v', bitrate_max, '-minrate', bitrate_min, '-maxrate', bitrate_max])
         
-        # Level (only if not skipping video)
+        # Level (only if not skipping video and level is specified)
         if not skip_video:
             level = self.encoding_params.get("level", "4.0")
-            cmd.extend(['-level', level])
+            # Skip level if set to 'auto' or None
+            if level and level.lower() != "auto":
+                cmd.extend(['-level', level])
         
         # Pixel format - set for both CPU and GPU (GPU uses p010le for 10-bit)
         if not skip_video:
@@ -711,7 +726,7 @@ class BatchEncoder(QObject):
         stem = Path(filename).stem
         ext = Path(filename).suffix
         
-        output_path = output_dir / f"{stem}.encoded{ext}"
+        output_path = output_dir / f"{stem}{ext}"
         
         return output_path
     
