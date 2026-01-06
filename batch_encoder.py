@@ -602,8 +602,31 @@ class BatchEncoder(QObject):
 
         if use_target_bitrate or use_bitrate_limits:
             # Determine resolution-specific bitrate
+            # Prioritize WIDTH first - only use height as fallback for portrait content
             height = media_info.height
-            if height >= 2160:
+            width = media_info.width
+            
+            # Width-first detection (handles all landscape/standard content)
+            if width >= 3840:
+                target_bitrate = self.encoding_params.get("target_bitrate_4k", 8000)
+                bitrate_min = self.encoding_params.get("encoding_bitrate_min_4k", 6000)
+                bitrate_max = self.encoding_params.get("encoding_bitrate_max_4k", 10000)
+            elif width >= 2560:
+                target_bitrate = self.encoding_params.get("target_bitrate_1440p", 5000)
+                bitrate_min = self.encoding_params.get("encoding_bitrate_min_1440p", 3000)
+                bitrate_max = self.encoding_params.get("encoding_bitrate_max_1440p", 6000)
+            elif width >= 1900:
+                # 1080p class: 1920-wide content regardless of height (768, 800, 1080, 1440, etc.)
+                target_bitrate = self.encoding_params.get("target_bitrate_1080p", 3000)
+                bitrate_min = self.encoding_params.get("encoding_bitrate_min_1080p", 1500)
+                bitrate_max = self.encoding_params.get("encoding_bitrate_max_1080p", 4000)
+            elif width >= 1200:
+                # 720p class: 1280-wide content regardless of height
+                target_bitrate = self.encoding_params.get("target_bitrate_720p", 1500)
+                bitrate_min = self.encoding_params.get("encoding_bitrate_min_720p", 1000)
+                bitrate_max = self.encoding_params.get("encoding_bitrate_max_720p", 2000)
+            # Height fallback for portrait/narrow content only
+            elif height >= 2160:
                 target_bitrate = self.encoding_params.get("target_bitrate_4k", 8000)
                 bitrate_min = self.encoding_params.get("encoding_bitrate_min_4k", 6000)
                 bitrate_max = self.encoding_params.get("encoding_bitrate_max_4k", 10000)

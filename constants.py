@@ -75,6 +75,8 @@ CODEC_OPTIONS = {
 DEFAULT_CONFIG = {
     "media_path": "",
     "scan_threads": 8,  # Number of parallel threads for scanning media files
+    "preferred_audio_languages": ["eng"],  # Preferred audio languages for checking/filtering
+    "preferred_subtitle_languages": ["eng"],  # Preferred subtitle languages for checking/filtering
     "encoding": {
         "codec_type": "x265",
         "codec": "libx265",
@@ -146,7 +148,9 @@ DEFAULT_CONFIG = {
         "min_bitrate_4k": RECOMMENDED_SETTINGS["4k"]["min_bitrate"],
         "max_bitrate_4k": RECOMMENDED_SETTINGS["4k"]["max_bitrate"],
         "preferred_codec": "hevc",
-        "bit_depth_preference": "source"  # Options: "source", "force_10bit", "force_8bit"
+        "bit_depth_preference": "source",  # Options: "source", "force_10bit", "force_8bit"
+        "subtitle_check": "ignore",  # Options: "ignore", "warning", "below_standard"
+        "cover_art_check": "ignore"  # Options: "ignore", "warning", "below_standard"
     },
     "ui": {
         "show_pretty_output": True,

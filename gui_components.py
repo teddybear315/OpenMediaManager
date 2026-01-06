@@ -377,6 +377,24 @@ class SettingsDialog(QDialog):
         self.scan_threads_spin.setToolTip("Number of parallel threads for scanning media files (1-16)")
         general_layout.addRow("Scan Threads:", self.scan_threads_spin)
         
+        general_layout.addRow(QLabel(""), QLabel(""))
+        general_layout.addRow(QLabel("<b>Preferred Languages:</b>"), QLabel(""))
+        pref_lang_desc = QLabel("<i>Used for subtitle/audio checking and as defaults for stream filtering during encoding.</i>")
+        pref_lang_desc.setWordWrap(True)
+        general_layout.addRow(pref_lang_desc)
+        
+        self.preferred_audio_langs_edit = QLineEdit()
+        self.preferred_audio_langs_edit.setText(", ".join(self.config.get("preferred_audio_languages", ["eng"])))
+        self.preferred_audio_langs_edit.setPlaceholderText("e.g., eng, jpn, spa")
+        self.preferred_audio_langs_edit.setToolTip("Preferred audio languages (comma-separated ISO 639-2 codes)")
+        general_layout.addRow("Audio Languages:", self.preferred_audio_langs_edit)
+        
+        self.preferred_subtitle_langs_edit = QLineEdit()
+        self.preferred_subtitle_langs_edit.setText(", ".join(self.config.get("preferred_subtitle_languages", ["eng"])))
+        self.preferred_subtitle_langs_edit.setPlaceholderText("e.g., eng, jpn, spa")
+        self.preferred_subtitle_langs_edit.setToolTip("Preferred subtitle languages for compliance checking (comma-separated ISO 639-2 codes)")
+        general_layout.addRow("Subtitle Languages:", self.preferred_subtitle_langs_edit)
+        
         general_tab.setLayout(general_layout)
         tabs.addTab(general_tab, "General")
         
@@ -480,6 +498,45 @@ class SettingsDialog(QDialog):
             self.bit_depth_combo.setCurrentIndex(index)
         quality_layout.addRow("Bit Depth Preference:", self.bit_depth_combo)
         
+        quality_layout.addRow(QLabel(""), QLabel(""))
+        quality_layout.addRow(QLabel("<b>Asset Checking:</b>"), QLabel(""))
+        
+        # Subtitle checking
+        self.subtitle_check_combo = QComboBox()
+        self.subtitle_check_combo.addItem("Ignore", "ignore")
+        self.subtitle_check_combo.addItem("Warning (add to issues)", "warning")
+        self.subtitle_check_combo.addItem("Needs Re-encoding (if missing)", "needs_reencoding")
+        self.subtitle_check_combo.addItem("Below Standard (if missing)", "below_standard")
+        subtitle_check = quality_config.get("subtitle_check", "ignore")
+        index = self.subtitle_check_combo.findData(subtitle_check)
+        if index >= 0:
+            self.subtitle_check_combo.setCurrentIndex(index)
+        self.subtitle_check_combo.setToolTip(
+            "Ignore: Don't check for subtitles\n"
+            "Warning: Add to issues if missing, but don't change status\n"
+            "Needs Re-encoding: Mark file as Needs Re-encoding if missing subtitles\n"
+            "Below Standard: Mark file as Below Standard if missing subtitles"
+        )
+        quality_layout.addRow("Subtitle Check:", self.subtitle_check_combo)
+        
+        # Cover art checking
+        self.cover_art_check_combo = QComboBox()
+        self.cover_art_check_combo.addItem("Ignore", "ignore")
+        self.cover_art_check_combo.addItem("Warning (add to issues)", "warning")
+        self.cover_art_check_combo.addItem("Needs Re-encoding (if missing)", "needs_reencoding")
+        self.cover_art_check_combo.addItem("Below Standard (if missing)", "below_standard")
+        cover_art_check = quality_config.get("cover_art_check", "ignore")
+        index = self.cover_art_check_combo.findData(cover_art_check)
+        if index >= 0:
+            self.cover_art_check_combo.setCurrentIndex(index)
+        self.cover_art_check_combo.setToolTip(
+            "Ignore: Don't check for cover art\n"
+            "Warning: Add to issues if missing, but don't change status\n"
+            "Needs Re-encoding: Mark file as Needs Re-encoding if missing cover art\n"
+            "Below Standard: Mark file as Below Standard if missing cover art"
+        )
+        quality_layout.addRow("Cover Art Check:", self.cover_art_check_combo)
+        
         quality_tab.setLayout(quality_layout)
         tabs.addTab(quality_tab, "Quality Standards")
         
@@ -520,6 +577,10 @@ class SettingsDialog(QDialog):
         self.config["media_path"] = self.media_path_edit.text()
         self.config["scan_threads"] = self.scan_threads_spin.value()
         
+        # Save preferred languages
+        self.config["preferred_audio_languages"] = [lang.strip() for lang in self.preferred_audio_langs_edit.text().split(",") if lang.strip()]
+        self.config["preferred_subtitle_languages"] = [lang.strip() for lang in self.preferred_subtitle_langs_edit.text().split(",") if lang.strip()]
+        
         # Update quality_standards section (used by scanner for compliance checking)
         self.config["quality_standards"]["min_bitrate_low_res"] = self.min_bitrate_low_res_spin.value()
         self.config["quality_standards"]["max_bitrate_low_res"] = self.max_bitrate_low_res_spin.value()
@@ -532,6 +593,8 @@ class SettingsDialog(QDialog):
         self.config["quality_standards"]["min_bitrate_4k"] = self.min_bitrate_4k_spin.value()
         self.config["quality_standards"]["max_bitrate_4k"] = self.max_bitrate_4k_spin.value()
         self.config["quality_standards"]["bit_depth_preference"] = self.bit_depth_combo.currentData()
+        self.config["quality_standards"]["subtitle_check"] = self.subtitle_check_combo.currentData()
+        self.config["quality_standards"]["cover_art_check"] = self.cover_art_check_combo.currentData()
         
         return self.config
 
@@ -808,11 +871,10 @@ class EncodingCompleteDialog(QDialog):
 
 
 
-
 class PreEncodeSettingsDialog(QDialog):
     """Dialog shown before encoding starts to confirm and adjust settings."""
     
-    def __init__(self, config: Dict[str, Any], files: List[MediaInfo], parent=None):
+    def __init__(self, config: Dict[str, Any], files: List[MediaInfo], parent=None, config_manager: ConfigManager = None):
         """
         Initialize the pre-encode settings dialog.
         
@@ -820,11 +882,21 @@ class PreEncodeSettingsDialog(QDialog):
             config: Current configuration dictionary.
             files: List of MediaInfo files to be encoded.
             parent: Parent widget.
+            config_manager: ConfigManager instance for profile/settings persistence.
         """
         super().__init__(parent)
         self.config = config.copy()
         self.files = files
         self.file_count = len(files)
+        self.config_manager = config_manager or ConfigManager()
+        
+        # Load last encoding settings if available
+        last_settings = self.config_manager.load_last_encoding_settings()
+        if last_settings:
+            # Merge last settings into encoding section
+            enc = self.config.get("encoding", {})
+            enc.update(last_settings)
+            self.config["encoding"] = enc
         
         # Detect resolutions present in files
         self.detected_resolutions = self._detect_resolutions()
@@ -838,6 +910,7 @@ class PreEncodeSettingsDialog(QDialog):
         """
         Detect which resolutions are present in the files to be encoded.
         Uses the same logic as compliance detection in MediaScanner._check_compliance.
+        Prioritizes WIDTH since it stays consistent across aspect ratios.
         
         Returns:
             Set of resolution identifiers: 'low_res', '720p', '1080p', '1440p', '4k'
@@ -846,19 +919,29 @@ class PreEncodeSettingsDialog(QDialog):
         for media_info in self.files:
             height = media_info.height
             width = media_info.width
-            max_dimension = max(height, width)
-
-            if (max_dimension >= 1024 and max_dimension < 1900) or ((height >= 700 and height < 1000) or (width >= 1024 and width < 1900)):
-                # Flexible 720p range
-                resolutions.add("720p")
-            elif (max_dimension >= 1900 and max_dimension < 2560) or ((height >= 1000 and height < 1440) or (width >= 1900 and width < 2560)):
-                # Flexible 1080p range: handles 1076, 1040, 800 heights with 1920+ widths
-                resolutions.add("1080p")
-            elif (max_dimension >= 2560 and max_dimension < 3840) or ((height >= 1440 and height < 2160) or (width >= 2560 and width < 3840)):
-                resolutions.add("1440p")
-            elif max_dimension >= 3840 or (height >= 2160 or width >= 3840):
-                resolutions.add("4k")
-            else: resolutions.add("low_res")
+            
+            # Width-first detection (handles all landscape/standard content)
+            if width >= 3840:
+                resolutions.add('4k')
+            elif width >= 2560:
+                resolutions.add('1440p')
+            elif width >= 1900:
+                # 1080p class: 1920-wide content regardless of height (768, 800, 1080, 1440, etc.)
+                resolutions.add('1080p')
+            elif width >= 1200:
+                # 720p class: 1280-wide content regardless of height
+                resolutions.add('720p')
+            # Height fallback for portrait/narrow content only
+            elif height >= 2160:
+                resolutions.add('4k')
+            elif height >= 1440:
+                resolutions.add('1440p')
+            elif height >= 1080:
+                resolutions.add('1080p')
+            elif height >= 720:
+                resolutions.add('720p')
+            elif width > 0 or height > 0:
+                resolutions.add('low_res')
             
         return resolutions
     
@@ -873,6 +956,36 @@ class PreEncodeSettingsDialog(QDialog):
         # File count
         count_label = QLabel(f"<p>Ready to encode <b>{self.file_count}</b> file(s)</p>")
         layout.addWidget(count_label)
+        
+        # Profile selector section
+        profile_group = QGroupBox("Encoding Profiles")
+        profile_layout = QHBoxLayout()
+        
+        self.profile_combo = QComboBox()
+        self.profile_combo.setMinimumWidth(200)
+        self._refresh_profiles()
+        self.profile_combo.currentTextChanged.connect(self._on_profile_selected)
+        profile_layout.addWidget(QLabel("Profile:"))
+        profile_layout.addWidget(self.profile_combo)
+        
+        load_btn = QPushButton("Load")
+        load_btn.clicked.connect(self._load_selected_profile)
+        load_btn.setToolTip("Load the selected profile")
+        profile_layout.addWidget(load_btn)
+        
+        save_btn = QPushButton("Save As...")
+        save_btn.clicked.connect(self._save_profile)
+        save_btn.setToolTip("Save current settings as a new profile")
+        profile_layout.addWidget(save_btn)
+        
+        delete_btn = QPushButton("Delete")
+        delete_btn.clicked.connect(self._delete_profile)
+        delete_btn.setToolTip("Delete the selected profile")
+        profile_layout.addWidget(delete_btn)
+        
+        profile_layout.addStretch()
+        profile_group.setLayout(profile_layout)
+        layout.addWidget(profile_group)
         
         # Create scroll area for settings
         scroll = QScrollArea()
@@ -1073,13 +1186,19 @@ class PreEncodeSettingsDialog(QDialog):
         audio_settings = self.config.get("audio", {})
         subtitle_settings = self.config.get("subtitles", {})
         
+        # Use preferred languages from config as defaults if not set in audio/subtitle settings
+        preferred_audio = self.config.get("preferred_audio_languages", ["eng"])
+        preferred_subtitle = self.config.get("preferred_subtitle_languages", ["eng"])
+        
         # Audio language filtering
         self.audio_filter_check = QCheckBox("Filter audio tracks by language")
         self.audio_filter_check.setChecked(audio_settings.get("language_filter_enabled", False))
         lang_layout.addRow("", self.audio_filter_check)
         
         self.audio_lang_edit = QLineEdit()
-        self.audio_lang_edit.setText(", ".join(audio_settings.get("allowed_languages", ["eng"])))
+        # Use audio settings if set, otherwise fall back to preferred languages
+        audio_langs = audio_settings.get("allowed_languages", preferred_audio)
+        self.audio_lang_edit.setText(", ".join(audio_langs))
         self.audio_lang_edit.setPlaceholderText("e.g., eng, jpn, spa")
         self.audio_lang_edit.setEnabled(self.audio_filter_check.isChecked())
         lang_layout.addRow("Audio Languages:", self.audio_lang_edit)
@@ -1090,7 +1209,9 @@ class PreEncodeSettingsDialog(QDialog):
         lang_layout.addRow("", self.subtitle_filter_check)
         
         self.subtitle_lang_edit = QLineEdit()
-        self.subtitle_lang_edit.setText(", ".join(subtitle_settings.get("allowed_languages", ["eng"])))
+        # Use subtitle settings if set, otherwise fall back to preferred languages
+        subtitle_langs = subtitle_settings.get("allowed_languages", preferred_subtitle)
+        self.subtitle_lang_edit.setText(", ".join(subtitle_langs))
         self.subtitle_lang_edit.setPlaceholderText("e.g., eng, jpn, spa")
         self.subtitle_lang_edit.setEnabled(self.subtitle_filter_check.isChecked())
         lang_layout.addRow("Subtitle Languages:", self.subtitle_lang_edit)
@@ -1254,6 +1375,9 @@ class PreEncodeSettingsDialog(QDialog):
             enc[f"target_bitrate_{res_key}"] = spinboxes['target'].value()
         self.config["encoding"] = enc
         
+        # Cache last encoding settings for next time
+        self.config_manager.save_last_encoding_settings(enc)
+        
         # Update language settings
         audio_settings = self.config.get("audio", {})
         audio_settings["language_filter_enabled"] = self.audio_filter_check.isChecked()
@@ -1266,6 +1390,211 @@ class PreEncodeSettingsDialog(QDialog):
         self.config["subtitles"] = subtitle_settings
         
         return self.config
+    
+    def _get_current_encoding_settings(self) -> Dict[str, Any]:
+        """
+        Get current encoding settings from the UI controls.
+        
+        Returns:
+            Dictionary of encoding settings.
+        """
+        enc = {}
+        enc["codec_type"] = "x265" if "x265" in self.codec_combo.currentText() else "av1"
+        enc["use_gpu"] = self.gpu_check.isChecked()
+        enc["preset"] = self.preset_combo.currentText()
+        enc["tune_animation"] = self.animation_check.isChecked()
+        enc["cq"] = self.cq_spin.value()
+        enc["thread_count"] = self.thread_spin.value()
+        
+        # Level
+        level_text = self.level_combo.currentText()
+        if "Auto" in level_text or "ignore" in level_text:
+            enc["level"] = "auto"
+        else:
+            enc["level"] = level_text
+        
+        # Bit depth preference
+        bit_depth_text = self.bit_depth_combo.currentText()
+        if bit_depth_text == "Force 8-bit":
+            enc["bit_depth_preference"] = "force_8bit"
+        elif bit_depth_text == "Force 10-bit":
+            enc["bit_depth_preference"] = "force_10bit"
+        else:
+            enc["bit_depth_preference"] = "source"
+        
+        # Skip options
+        enc["skip_video_encoding"] = self.skip_video_check.isChecked()
+        enc["skip_audio_encoding"] = self.skip_audio_check.isChecked()
+        enc["skip_subtitle_encoding"] = self.skip_subtitle_check.isChecked()
+        enc["skip_cover_art"] = self.skip_cover_art_check.isChecked()
+        
+        enc["use_bitrate_limits"] = self.use_limits_check.isChecked()
+        enc["use_target_bitrate"] = self.use_target_check.isChecked()
+        enc["ignore_extras"] = self.ignore_extras_check.isChecked()
+        
+        # Collect bitrate values from resolution-specific spinboxes
+        for res_key, spinboxes in self.bitrate_spinboxes.items():
+            enc[f"encoding_bitrate_min_{res_key}"] = spinboxes['min'].value()
+            enc[f"encoding_bitrate_max_{res_key}"] = spinboxes['max'].value()
+            enc[f"target_bitrate_{res_key}"] = spinboxes['target'].value()
+        
+        return enc
+    
+    def _apply_encoding_settings(self, enc: Dict[str, Any]):
+        """
+        Apply encoding settings to the UI controls.
+        
+        Args:
+            enc: Dictionary of encoding settings.
+        """
+        # Codec
+        self.codec_combo.setCurrentText("x265 (HEVC)" if enc.get("codec_type", "x265") == "x265" else "AV1")
+        
+        # GPU
+        self.gpu_check.setChecked(enc.get("use_gpu", False))
+        
+        # Preset
+        if enc.get("preset") in [self.preset_combo.itemText(i) for i in range(self.preset_combo.count())]:
+            self.preset_combo.setCurrentText(enc.get("preset", "veryfast"))
+        
+        # Animation tuning
+        self.animation_check.setChecked(enc.get("tune_animation", False))
+        
+        # CQ
+        self.cq_spin.setValue(enc.get("cq", 22))
+        
+        # Thread count
+        self.thread_spin.setValue(enc.get("thread_count", 4))
+        
+        # Level
+        level = enc.get("level", "4.1")
+        if level and level.lower() != "auto":
+            self.level_combo.setCurrentText(level)
+        else:
+            self.level_combo.setCurrentText("Auto (ignore)")
+        
+        # Bit depth preference
+        bit_depth_pref = enc.get("bit_depth_preference", "source")
+        if bit_depth_pref == "force_8bit":
+            self.bit_depth_combo.setCurrentText("Force 8-bit")
+        elif bit_depth_pref == "force_10bit":
+            self.bit_depth_combo.setCurrentText("Force 10-bit")
+        else:
+            self.bit_depth_combo.setCurrentText("Match source")
+        
+        # Skip options
+        self.skip_video_check.setChecked(enc.get("skip_video_encoding", False))
+        self.skip_audio_check.setChecked(enc.get("skip_audio_encoding", False))
+        self.skip_subtitle_check.setChecked(enc.get("skip_subtitle_encoding", False))
+        self.skip_cover_art_check.setChecked(enc.get("skip_cover_art", True))
+        
+        # Bitrate options
+        self.use_limits_check.setChecked(enc.get("use_bitrate_limits", False))
+        self.use_target_check.setChecked(enc.get("use_target_bitrate", False))
+        self.ignore_extras_check.setChecked(enc.get("ignore_extras", True))
+        
+        # Bitrate spinboxes
+        for res_key, spinboxes in self.bitrate_spinboxes.items():
+            if f"encoding_bitrate_min_{res_key}" in enc:
+                spinboxes['min'].setValue(enc[f"encoding_bitrate_min_{res_key}"])
+            if f"encoding_bitrate_max_{res_key}" in enc:
+                spinboxes['max'].setValue(enc[f"encoding_bitrate_max_{res_key}"])
+            if f"target_bitrate_{res_key}" in enc:
+                spinboxes['target'].setValue(enc[f"target_bitrate_{res_key}"])
+        
+        # Update enabled states
+        self._toggle_bitrate_controls()
+        self.thread_spin.setEnabled(not self.gpu_check.isChecked())
+    
+    def _refresh_profiles(self):
+        """Refresh the profile dropdown with available profiles."""
+        current_text = self.profile_combo.currentText() if hasattr(self, 'profile_combo') else ""
+        self.profile_combo.blockSignals(True)
+        self.profile_combo.clear()
+        self.profile_combo.addItem("-- Select Profile --")
+        
+        profiles = self.config_manager.get_encoding_profiles()
+        for name in sorted(profiles.keys()):
+            self.profile_combo.addItem(name)
+        
+        # Restore selection if it still exists
+        if current_text and self.profile_combo.findText(current_text) >= 0:
+            self.profile_combo.setCurrentText(current_text)
+        
+        self.profile_combo.blockSignals(False)
+    
+    def _on_profile_selected(self, name: str):
+        """Handle profile selection change (just updates selection, doesn't auto-load)."""
+        pass  # Load is manual via the Load button
+    
+    def _load_selected_profile(self):
+        """Load the selected profile and apply settings."""
+        name = self.profile_combo.currentText()
+        if name == "-- Select Profile --" or not name:
+            return
+        
+        profile = self.config_manager.get_encoding_profile(name)
+        if profile:
+            self._apply_encoding_settings(profile)
+            QMessageBox.information(self, "Profile Loaded", f"Loaded profile: {name}")
+    
+    def _save_profile(self):
+        """Save current settings as a new profile."""
+        from PyQt6.QtWidgets import QInputDialog
+        
+        name, ok = QInputDialog.getText(
+            self, "Save Profile",
+            "Enter profile name:",
+            QLineEdit.EchoMode.Normal
+        )
+        
+        if ok and name:
+            name = name.strip()
+            if not name:
+                QMessageBox.warning(self, "Invalid Name", "Profile name cannot be empty.")
+                return
+            
+            # Check if profile exists
+            existing = self.config_manager.get_encoding_profiles()
+            if name in existing:
+                reply = QMessageBox.question(
+                    self, "Overwrite Profile",
+                    f"Profile '{name}' already exists. Overwrite?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
+            
+            # Get current settings and save
+            settings = self._get_current_encoding_settings()
+            if self.config_manager.save_encoding_profile(name, settings):
+                self._refresh_profiles()
+                self.profile_combo.setCurrentText(name)
+                QMessageBox.information(self, "Profile Saved", f"Saved profile: {name}")
+            else:
+                QMessageBox.warning(self, "Error", "Failed to save profile.")
+    
+    def _delete_profile(self):
+        """Delete the selected profile."""
+        name = self.profile_combo.currentText()
+        if name == "-- Select Profile --" or not name:
+            QMessageBox.information(self, "No Selection", "Please select a profile to delete.")
+            return
+        
+        reply = QMessageBox.question(
+            self, "Delete Profile",
+            f"Are you sure you want to delete profile '{name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            if self.config_manager.delete_encoding_profile(name):
+                self._refresh_profiles()
+                QMessageBox.information(self, "Profile Deleted", f"Deleted profile: {name}")
+            else:
+                QMessageBox.warning(self, "Error", "Failed to delete profile.")
 
 
 class EncodingLogDialog(QDialog):
@@ -2345,6 +2674,10 @@ class MainWindow(QMainWindow):
             item.setText(7, f"{size_mb:.2f} MB")
         
         issues_str = ", ".join(media_info.issues) if media_info.issues else ""
+        if media_info.warnings and media_info.issues: issues_str += " | "
+        if media_info.warnings:
+            issues_str += "ℹ️ " + ", ".join(media_info.warnings)
+
         item.setText(8, issues_str)
         item.setToolTip(8, issues_str)
         
@@ -2408,6 +2741,7 @@ class MainWindow(QMainWindow):
         <p>{', '.join(media_info.subtitle_tracks) if media_info.subtitle_tracks else 'None'}</p>
         
         {f'<h4>Issues:</h4><p style="color: red;">{"<br>".join(media_info.issues)}</p>' if media_info.issues else ''}
+        {f'<h4>Warnings:</h4><p style="color: orange;">{"<br>".join(media_info.warnings)}</p>' if media_info.warnings else ''}
         """
         
         msg = QMessageBox(self)
@@ -2725,6 +3059,10 @@ class MainWindow(QMainWindow):
         
         # Issues
         issues_str = ", ".join(media_info.issues) if media_info.issues else ""
+        if media_info.warnings and media_info.issues: issues_str += " | "
+        if media_info.warnings:
+            issues_str += "ℹ️ " + ", ".join(media_info.warnings)
+
         item.setText(8, issues_str)
         item.setToolTip(8, issues_str)
         
@@ -2774,7 +3112,7 @@ class MainWindow(QMainWindow):
             mode: Encoding mode.
         """
         # Show pre-encode settings dialog
-        settings_dialog = PreEncodeSettingsDialog(self.config, files, self)
+        settings_dialog = PreEncodeSettingsDialog(self.config, files, self, config_manager=self.config_manager)
         if settings_dialog.exec() != QDialog.DialogCode.Accepted:
             return
         

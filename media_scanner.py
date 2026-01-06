@@ -64,6 +64,9 @@ class MediaInfo:
     # Subtitle properties
     subtitle_tracks: List[str] = field(default_factory=list)
     
+    # Cover art / attached pictures
+    has_cover_art: bool = False
+    
     # File properties
     file_size: int = 0  # in bytes
     
@@ -84,6 +87,7 @@ class MediaInfo:
     
     # Reasons for non-compliance
     issues: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
 
 
 class MediaScanner:
@@ -343,6 +347,7 @@ class MediaScanner:
                                 audio_channels=cached_data.get('audio_channels', 0),
                                 audio_language=cached_data.get('audio_language', ''),
                                 subtitle_tracks=cached_data.get('subtitle_tracks', []),
+                                has_cover_art=cached_data.get('has_cover_art', False),
                                 issues=cached_data.get('issues', []),
                                 category=MediaCategory(cached_data.get('category', 'movie')),
                                 is_show=cached_data.get('is_show', False),
@@ -487,7 +492,7 @@ class MediaScanner:
                 '-analyzeduration', '2000000',  # 2 seconds max
                 '-print_format', 'json',
                 '-show_entries', 
-                'stream=codec_name,codec_type,width,height,r_frame_rate,bit_rate,pix_fmt,channels:stream_tags=language:format=duration,bit_rate',
+                'stream=codec_name,codec_type,width,height,r_frame_rate,bit_rate,pix_fmt,channels,disposition:stream_tags=language:format=duration,bit_rate',
                 str(media_info.path)
             ]
             
@@ -567,6 +572,18 @@ class MediaScanner:
             ]
             media_info.subtitle_tracks = subtitle_streams
             
+            # Detect cover art / attached pictures
+            # Cover art is typically a video stream with codec mjpeg/png and disposition:attached_pic
+            # or simply a second video stream that's an image codec
+            video_streams = [s for s in data.get('streams', []) if s.get('codec_type') == 'video']
+            for vs in video_streams:
+                codec = vs.get('codec_name', '').lower()
+                disposition = vs.get('disposition', {})
+                # Check for attached_pic disposition or image codecs
+                if disposition.get('attached_pic', 0) == 1 or codec in ['mjpeg', 'png', 'bmp', 'gif', 'webp']:
+                    media_info.has_cover_art = True
+                    break
+            
             # Get duration (if not already set during bitrate estimation)
             if media_info.duration == 0 and 'duration' in data.get('format', {}):
                 try:
@@ -600,6 +617,7 @@ class MediaScanner:
                     'audio_channels': media_info.audio_channels,
                     'audio_language': media_info.audio_language,
                     'subtitle_tracks': media_info.subtitle_tracks,
+                    'has_cover_art': media_info.has_cover_art,
                     'issues': media_info.issues,
                     'category': media_info.category.value,
                     'is_show': media_info.is_show,
@@ -733,33 +751,48 @@ class MediaScanner:
         """
         issues = []
         
-        # Determine resolution category based on width or height
-        # This handles non-standard aspect ratios better (e.g., 1920x800, 1920x1040, 1440x1076)
+        # Determine resolution category based primarily on WIDTH
+        # Width stays consistent across aspect ratios (1920 = 1080p, 1280 = 720p, etc.)
+        # Height varies with letterboxing/cropping (1920x800, 1920x1080, 1920x1440 are all "1080p-class")
         height = media_info.height
         width = media_info.width
         
-        # Categorize based on flexible ranges to handle non-standard resolutions
-        # Use the larger dimension to determine category
-        max_dimension = max(height, width)
-        
-        if (max_dimension >= 1024 and max_dimension < 1900) or ((height >= 700 and height < 1000) or (width >= 1024 and width < 1900)):
-            # Flexible 720p range
-            res_category = "720p"
-            min_bitrate = self.quality_standards.get("min_bitrate_720p", 1000)
-            max_bitrate = self.quality_standards.get("max_bitrate_720p", 2000)
-        elif (max_dimension >= 1900 and max_dimension < 2560) or ((height >= 1000 and height < 1440) or (width >= 1900 and width < 2560)):
-            # Flexible 1080p range: handles 1076, 1040, 800 heights with 1920+ widths
-            res_category = "1080p"
-            min_bitrate = self.quality_standards.get("min_bitrate_1080p", 1500)
-            max_bitrate = self.quality_standards.get("max_bitrate_1080p", 4000)
-        elif (max_dimension >= 2560 and max_dimension < 3840) or ((height >= 1440 and height < 2160) or (width >= 2560 and width < 3840)):
-            res_category = "1440p"
-            min_bitrate = self.quality_standards.get("min_bitrate_1440p", 3000)
-            max_bitrate = self.quality_standards.get("max_bitrate_1440p", 6000)
-        elif max_dimension >= 3840 or (height >= 2160 or width >= 3840):
+        # Width-first detection (handles all landscape/standard content)
+        if width >= 3840:
             res_category = "4k"
             min_bitrate = self.quality_standards.get("min_bitrate_4k", 6000)
             max_bitrate = self.quality_standards.get("max_bitrate_4k", 10000)
+        elif width >= 2560:
+            res_category = "1440p"
+            min_bitrate = self.quality_standards.get("min_bitrate_1440p", 3000)
+            max_bitrate = self.quality_standards.get("max_bitrate_1440p", 6000)
+        elif width >= 1900:
+            # 1080p class: 1920-wide content regardless of height (768, 800, 1080, 1440, etc.)
+            res_category = "1080p"
+            min_bitrate = self.quality_standards.get("min_bitrate_1080p", 1500)
+            max_bitrate = self.quality_standards.get("max_bitrate_1080p", 4000)
+        elif width >= 1200:
+            # 720p class: 1280-wide content regardless of height
+            res_category = "720p"
+            min_bitrate = self.quality_standards.get("min_bitrate_720p", 1000)
+            max_bitrate = self.quality_standards.get("max_bitrate_720p", 2000)
+        # Height fallback for portrait/narrow content only
+        elif height >= 2160:
+            res_category = "4k"
+            min_bitrate = self.quality_standards.get("min_bitrate_4k", 6000)
+            max_bitrate = self.quality_standards.get("max_bitrate_4k", 10000)
+        elif height >= 1440:
+            res_category = "1440p"
+            min_bitrate = self.quality_standards.get("min_bitrate_1440p", 3000)
+            max_bitrate = self.quality_standards.get("max_bitrate_1440p", 6000)
+        elif height >= 1080:
+            res_category = "1080p"
+            min_bitrate = self.quality_standards.get("min_bitrate_1080p", 1500)
+            max_bitrate = self.quality_standards.get("max_bitrate_1080p", 4000)
+        elif height >= 720:
+            res_category = "720p"
+            min_bitrate = self.quality_standards.get("min_bitrate_720p", 1000)
+            max_bitrate = self.quality_standards.get("max_bitrate_720p", 2000)
         else:
             # Below 720p - use low_res bitrate settings
             res_category = "low_res"
@@ -795,8 +828,54 @@ class MediaScanner:
             elif media_info.bitrate > max_bitrate:
                 issues.append(f"Bitrate {media_info.bitrate}kbps exceeds max {max_bitrate}kbps for {res_category}")
         
-        media_info.issues = issues
+        # Track warnings separately - these show in issues but don't change status
+        warnings = []
         
+        # Check subtitles based on preference
+        subtitle_check = self.quality_standards.get("subtitle_check", "ignore")
+        if subtitle_check != "ignore":
+            preferred_langs = self.quality_standards.get("preferred_subtitle_languages", ["eng"])
+            
+            # Check if any preferred language subtitle exists
+            has_preferred_subtitle = False
+            if media_info.subtitle_tracks:
+                # If only 1 subtitle and no language tag (or 'unknown'), assume compliant
+                if len(media_info.subtitle_tracks) == 1 and media_info.subtitle_tracks[0] in ['unknown', '', None]:
+                    has_preferred_subtitle = True
+                else:
+                    # Check if any subtitle matches preferred languages
+                    for lang in media_info.subtitle_tracks:
+                        if lang and lang.lower() in [pl.lower() for pl in preferred_langs]:
+                            has_preferred_subtitle = True
+                            break
+            
+            if not has_preferred_subtitle:
+                missing_msg = f"Missing subtitles ({', '.join(preferred_langs)})"
+                if subtitle_check == "below_standard":
+                    media_info.issues.append(missing_msg)
+                    return MediaStatus.BELOW_STANDARD
+                elif subtitle_check == "needs_reencoding":
+                    issues.append(missing_msg)
+                elif subtitle_check == "warning":
+                    warnings.append(missing_msg)
+        
+        # Check cover art based on preference
+        cover_art_check = self.quality_standards.get("cover_art_check", "ignore")
+        if cover_art_check != "ignore":
+            if not media_info.has_cover_art:
+                if cover_art_check == "below_standard":
+                    media_info.issues.append("Missing cover art")
+                    return MediaStatus.BELOW_STANDARD
+                elif cover_art_check == "needs_reencoding":
+                    issues.append("Missing cover art")
+                elif cover_art_check == "warning":
+                    warnings.append("Missing cover art")
+        
+        # Combine issues and warnings for display
+        media_info.issues = issues
+        media_info.warnings = warnings
+        
+        # Only issues (not warnings) affect the status
         if issues:
             return MediaStatus.NEEDS_REENCODING
         else:
