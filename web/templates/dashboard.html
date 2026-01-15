@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Open Media Manager - Web Interface</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-content">
+                <h1 class="app-title">Open Media Manager</h1>
+                <div class="header-actions">
+                    <button id="scanBtn" class="btn btn-primary">Scan Media</button>
+                    <button id="themeBtn" class="btn btn-secondary" title="Toggle theme">🌙</button>
+                    <button id="settingsBtn" class="btn btn-secondary">Settings</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="app-main">
+            <!-- Media Library Section -->
+            <section id="mediaSection" class="media-section">
+                <div class="section-header">
+                    <h2>Media Library</h2>
+                    <div class="section-actions">
+                        <select id="filterStatus" class="select-control">
+                            <option value="">All Files</option>
+                            <option value="✅">Compliant</option>
+                            <option value="⚠️">Needs Re-encoding</option>
+                            <option value="ℹ️">Below Standard</option>
+                            <option value="🔍">Scanning</option>
+                            <option value="⛔">Error</option>
+                        </select>
+                        <input type="text" id="searchInput" class="input-control" placeholder="Search files...">
+                        <button id="selectAllBtn" class="btn btn-secondary">Select All</button>
+                        <button id="encodeBtn" class="btn btn-primary">Encode Selected</button>
+                        <button id="stopEncodingBtn" class="btn btn-danger" style="display: none;">⏹ Stop Encoding</button>
+                    </div>
+                </div>
+
+                <div class="media-table-wrapper">
+                    <table id="mediaTable" class="media-table">
+                        <thead>
+                            <tr>
+                                <th><input type="checkbox" id="selectAllCheckbox"></th>
+                                <th>Filename</th>
+                                <th>Status</th>
+                                <th>Resolution</th>
+                                <th>Codec</th>
+                                <th>Bitrate</th>
+                                <th>Duration</th>
+                                <th>Size</th>
+                            </tr>
+                        </thead>
+                        <tbody id="mediaTableBody">
+                            <tr class="loading-row">
+                                <td colspan="9">Loading media files...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Encoding Log Section -->
+            <section id="logSection" class="log-section collapsed">
+                <div class="section-header">
+                    <h2><span class="log-toggle">▶</span>Encoding Log</h2>
+                    <div class="section-actions">
+                        <button id="clearLogBtn" class="btn btn-secondary">Clear Log</button>
+                        <button id="stopEncodingBtn" class="btn btn-danger" disabled>Stop Encoding</button>
+                    </div>
+                </div>
+
+                <!-- File Progress Bar -->
+                <div id="fileProgressContainer" style="display: none; padding: 1rem; background-color: var(--bg-secondary); border-bottom: 1px solid var(--border-color);">
+                    <div style="margin-bottom: 0.5rem;">
+                        <label id="fileProgressLabel" style="font-size: 0.9rem; color: var(--text-color);">Ready to start...</label>
+                    </div>
+                    <div id="fileProgressBar" class="progress-bar" style="height: 20px; background-color: #333; border-radius: 4px; overflow: hidden;">
+                        <div id="fileProgressFill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #4a9eff, #2a7fff); transition: width 0.3s ease;"></div>
+                    </div>
+                </div>
+
+                <!-- Batch Progress Bar -->
+                <div id="batchProgressContainer" style="display: none; padding: 1rem; background-color: var(--bg-secondary); border-bottom: 1px solid var(--border-color);">
+                    <div style="margin-bottom: 0.5rem;">
+                        <label id="batchProgressLabel" style="font-size: 0.9rem; color: var(--text-color);">Batch Progress</label>
+                    </div>
+                    <div id="batchProgressBar" class="progress-bar" style="height: 20px; background-color: #333; border-radius: 4px; overflow: hidden;">
+                        <div id="batchProgressFill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #51cf66, #2a8f3f); transition: width 0.3s ease;"></div>
+                    </div>
+                </div>
+
+                <!-- Statistics Area -->
+                <div id="statisticsContainer" style="display: none; padding: 1rem; background-color: var(--bg-secondary); border-bottom: 1px solid var(--border-color);">
+                    <h4 style="margin: 0 0 0.5rem 0; color: var(--text-color);">Overall Statistics</h4>
+                    <div id="statisticsLabel" style="font-size: 0.85rem; color: #aaa; font-family: monospace;">No files processed yet</div>
+                </div>
+
+                <div id="encodingLog" class="encoding-log"></div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Settings Dialog -->
+    <div id="settingsDialog" class="modal-overlay">
+        <div class="modal-content" style="max-width: 800px; max-height: 90vh; overflow-y: auto;">
+            <div class="modal-header">
+                <h2>Settings</h2>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 0;">
+                <div style="display: flex; border-bottom: 1px solid var(--border-color);">
+                    <button class="settings-tab active" data-tab="general" style="flex: 1; padding: 1rem; border: none; background: none; cursor: pointer; text-align: left; color: var(--text-color); border-bottom: 2px solid var(--primary-color);">General</button>
+                    <button class="settings-tab" data-tab="quality" style="flex: 1; padding: 1rem; border: none; background: none; cursor: pointer; text-align: left; color: var(--text-color); border-bottom: 2px solid transparent;">Quality Standards</button>
+                </div>
+
+                <form id="settingsForm" style="padding: 1.5rem;">
+                    <!-- GENERAL TAB -->
+                    <div id="general-tab" class="settings-tab-content active">
+                        <div class="form-group" style="margin-bottom: 1.5rem;">
+                            <label for="mediaPath" style="display: block; font-weight: 600; margin-bottom: 0.5rem;">Media Path:</label>
+                            <input type="text" id="mediaPath" class="input-control" style="width: 100%; padding: 0.5rem;" required>
+                        </div>
+
+                        <div class="form-group" style="margin-bottom: 1.5rem;">
+                            <label for="scanThreads" style="display: block; font-weight: 600; margin-bottom: 0.5rem;">Scan Threads:</label>
+                            <input type="number" id="scanThreads" class="input-control" min="1" max="16" value="8" style="width: 100%; padding: 0.5rem;">
+                        </div>
+
+                        <hr style="border: none; border-top: 1px solid var(--border-color); margin: 2rem 0;">
+
+                        <h4 style="margin: 1.5rem 0 1rem 0;">Preferred Languages</h4>
+                        <p style="font-size: 0.9rem; color: #999; margin-bottom: 1rem;">Used for subtitle/audio checking and as defaults for stream filtering during encoding.</p>
+
+                        <div class="form-group" style="margin-bottom: 1.5rem;">
+                            <label for="audioLangs" style="display: block; font-weight: 600; margin-bottom: 0.5rem;">Audio Languages:</label>
+                            <input type="text" id="audioLangs" class="input-control" placeholder="e.g., eng, jpn, spa" style="width: 100%; padding: 0.5rem;">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="subtitleLangs" style="display: block; font-weight: 600; margin-bottom: 0.5rem;">Subtitle Languages:</label>
+                            <input type="text" id="subtitleLangs" class="input-control" placeholder="e.g., eng, jpn, spa" style="width: 100%; padding: 0.5rem;">
+                        </div>
+                    </div>
+
+                    <!-- QUALITY STANDARDS TAB -->
+                    <div id="quality-tab" class="settings-tab-content" style="display: none;">
+                        <h4 style="margin: 0 0 0.5rem 0;">Quality Standards (File Checking)</h4>
+                        <p style="font-size: 0.9rem; color: #999; margin-bottom: 1.5rem;">These settings determine which files need re-encoding based on their current quality.</p>
+
+                        <!-- Low-Res Settings -->
+                        <fieldset style="border: 1px solid var(--border-color); padding: 1rem; margin-bottom: 1.5rem; border-radius: 4px;">
+                            <legend style="padding: 0 0.5rem;">Below 720p Bitrate Range</legend>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                                <div class="form-group">
+                                    <label for="minLowRes" style="display: block; font-size: 0.9rem; margin-bottom: 0.5rem;">Min Bitrate:</label>
+                                    <input type="number" id="minLowRes" class="input-control" value="500" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group">
+                                    <label for="maxLowRes" style="display: block; font-size: 0.9rem; margin-bottom: 0.5rem;">Max Bitrate:</label>
+                                    <input type="number" id="maxLowRes" class="input-control" value="1000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                            </div>
+                        </fieldset>
+
+                        <!-- 720p Settings -->
+                        <fieldset style="border: 1px solid var(--border-color); padding: 1rem; margin-bottom: 1.5rem; border-radius: 4px;">
+                            <legend style="padding: 0 0.5rem;">720p Bitrate Range</legend>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                                <div class="form-group">
+                                    <label for="min720p" style="display: block; font-size: 0.9rem; margin-bottom: 0.5rem;">Min Bitrate:</label>
+                                    <input type="number" id="min720p" class="input-control" value="1000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group">
+                                    <label for="max720p" style="display: block; font-size: 0.9rem; margin-bottom: 0.5rem;">Max Bitrate:</label>
+                                    <input type="number" id="max720p" class="input-control" value="2000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                            </div>
+                        </fieldset>
+
+                        <!-- 1080p Settings -->
+                        <fieldset style="border: 1px solid var(--border-color); padding: 1rem; margin-bottom: 1.5rem; border-radius: 4px;">
+                            <legend style="padding: 0 0.5rem;">1080p Bitrate Range</legend>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                                <div class="form-group">
+                                    <label for="min1080p" style="display: block; font-size: 0.9rem; margin-bottom: 0.5rem;">Min Bitrate:</label>
+                                    <input type="number" id="min1080p" class="input-control" value="2000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group">
+                                    <label for="max1080p" style="display: block; font-size: 0.9rem; margin-bottom: 0.5rem;">Max Bitrate:</label>
+                                    <input type="number" id="max1080p" class="input-control" value="4000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                            </div>
+                        </fieldset>
+
+                        <!-- 1440p Settings -->
+                        <fieldset style="border: 1px solid var(--border-color); padding: 1rem; margin-bottom: 1.5rem; border-radius: 4px;">
+                            <legend style="padding: 0 0.5rem;">1440p Bitrate Range</legend>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                                <div class="form-group">
+                                    <label for="min1440p" style="display: block; font-size: 0.9rem; margin-bottom: 0.5rem;">Min Bitrate:</label>
+                                    <input type="number" id="min1440p" class="input-control" value="4000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group">
+                                    <label for="max1440p" style="display: block; font-size: 0.9rem; margin-bottom: 0.5rem;">Max Bitrate:</label>
+                                    <input type="number" id="max1440p" class="input-control" value="6000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                            </div>
+                        </fieldset>
+
+                        <!-- 4K Settings -->
+                        <fieldset style="border: 1px solid var(--border-color); padding: 1rem; margin-bottom: 1.5rem; border-radius: 4px;">
+                            <legend style="padding: 0 0.5rem;">4K Bitrate Range</legend>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                                <div class="form-group">
+                                    <label for="min4k" style="display: block; font-size: 0.9rem; margin-bottom: 0.5rem;">Min Bitrate:</label>
+                                    <input type="number" id="min4k" class="input-control" value="6000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group">
+                                    <label for="max4k" style="display: block; font-size: 0.9rem; margin-bottom: 0.5rem;">Max Bitrate:</label>
+                                    <input type="number" id="max4k" class="input-control" value="10000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                            </div>
+                        </fieldset>
+
+                        <hr style="border: none; border-top: 1px solid var(--border-color); margin: 2rem 0;">
+
+                        <h4 style="margin: 1.5rem 0 1rem 0;">Asset Checking</h4>
+
+                        <div class="form-group" style="margin-bottom: 1.5rem;">
+                            <label for="subtitleCheck" style="display: block; font-weight: 600; margin-bottom: 0.5rem;">Subtitle Check:</label>
+                            <select id="subtitleCheck" class="input-control" style="width: 100%; padding: 0.5rem;">
+                                <option value="ignore">Ignore</option>
+                                <option value="warning">Warning (add to issues)</option>
+                                <option value="needs_reencoding">Needs Re-encoding (if missing)</option>
+                                <option value="below_standard">Below Standard (if missing)</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="coverArtCheck" style="display: block; font-weight: 600; margin-bottom: 0.5rem;">Cover Art Check:</label>
+                            <select id="coverArtCheck" class="input-control" style="width: 100%; padding: 0.5rem;">
+                                <option value="ignore">Ignore</option>
+                                <option value="warning">Warning (add to issues)</option>
+                                <option value="needs_reencoding">Needs Re-encoding (if missing)</option>
+                                <option value="below_standard">Below Standard (if missing)</option>
+                            </select>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button id="cancelSettingsBtn" class="btn btn-secondary">Cancel</button>
+                <button id="saveSettingsBtn" class="btn btn-primary">Save Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Dialog -->
+    <div id="confirmDialog" class="modal-overlay">
+        <div class="modal-content modal-small">
+            <div class="modal-header">
+                <h2 id="confirmTitle">Confirm</h2>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="confirmMessage"></p>
+            </div>
+            <div class="modal-footer">
+                <button id="confirmCancelBtn" class="btn btn-secondary">Cancel</button>
+                <button id="confirmOkBtn" class="btn btn-primary">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Alert Dialog -->
+    <div id="alertDialog" class="modal-overlay">
+        <div class="modal-content modal-small">
+            <div class="modal-header">
+                <h2 id="alertTitle">Alert</h2>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="alertMessage"></p>
+            </div>
+            <div class="modal-footer">
+                <button id="alertOkBtn" class="btn btn-primary">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Encoding Settings Dialog -->
+    <div id="encodingSettingsDialog" class="modal-overlay">
+        <div class="modal-content modal-large" style="max-width: 1000px; max-height: 90vh; overflow-y: auto;">
+            <div class="modal-header">
+                <h2>Encoding Settings</h2>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 1.5rem;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                    <!-- LEFT COLUMN -->
+                    <div>
+                        <h3 style="margin-top: 0;">Profile</h3>
+                        <div class="form-group">
+                            <label>Encoding Profile:</label>
+                            <div style="display: flex; gap: 0.5rem;">
+                                <select id="encProfile" style="flex: 1; padding: 0.5rem;">
+                                    <option value="">Default</option>
+                                </select>
+                                <button type="button" id="encSaveProfile" class="btn" style="background: #4CAF50; color: var(--text-color); padding: 0.5rem 1rem;">Save</button>
+                                <button type="button" id="encDeleteProfile" class="btn" style="background: #f44336; color: var(--text-color); padding: 0.5rem 1rem;">Delete</button>
+                            </div>
+                        </div>
+
+                        <h3>Video Encoding</h3>
+                        <div class="form-group">
+                            <label for="encCodec">Codec:</label>
+                            <select id="encCodec" style="width: 100%; padding: 0.5rem;">
+                                <option value="x265">x265 (HEVC)</option>
+                                <option value="av1">AV1</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="encPreset">Preset:</label>
+                            <select id="encPreset" style="width: 100%; padding: 0.5rem;">
+                                <option value="ultrafast">Ultrafast</option>
+                                <option value="superfast">Superfast</option>
+                                <option value="veryfast" selected>Veryfast</option>
+                                <option value="faster">Faster</option>
+                                <option value="fast">Fast</option>
+                                <option value="medium">Medium</option>
+                                <option value="slow">Slow</option>
+                                <option value="slower">Slower</option>
+                                <option value="veryslow">Veryslow</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="encCQ">Quality (CQ):</label>
+                            <input type="number" id="encCQ" min="0" max="51" value="22" style="width: 100%; padding: 0.5rem;">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="encLevel">Level:</label>
+                            <select id="encLevel" style="width: 100%; padding: 0.5rem;">
+                                <option value="">Auto (ignore)</option>
+                                <option value="3.0">3.0</option>
+                                <option value="3.1">3.1</option>
+                                <option value="4.0">4.0</option>
+                                <option value="4.1" selected>4.1</option>
+                                <option value="5.0">5.0</option>
+                                <option value="5.1">5.1</option>
+                                <option value="5.2">5.2</option>
+                                <option value="6.0">6.0</option>
+                                <option value="6.1">6.1</option>
+                                <option value="6.2">6.2</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="encBitDepth">Bit Depth:</label>
+                            <select id="encBitDepth" style="width: 100%; padding: 0.5rem;">
+                                <option value="source" selected>Match source</option>
+                                <option value="force_8bit">Force 8-bit</option>
+                                <option value="force_10bit">Force 10-bit</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label><input type="checkbox" id="encUseGPU"> Use GPU (NVENC)</label>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="encThreads">Thread Count:</label>
+                            <input type="number" id="encThreads" min="1" max="32" value="4" style="width: 100%; padding: 0.5rem;">
+                        </div>
+
+                        <div class="form-group">
+                            <label><input type="checkbox" id="encTuneAnimation"> Tune for animation</label>
+                        </div>
+
+                        <h3>Skip Options</h3>
+                        <div class="form-group">
+                            <label><input type="checkbox" id="encSkipVideo"> Skip video encoding (copy stream)</label>
+                        </div>
+                        <div class="form-group">
+                            <label><input type="checkbox" id="encSkipAudio"> Skip audio encoding (copy stream)</label>
+                        </div>
+                        <div class="form-group">
+                            <label><input type="checkbox" id="encSkipSubs"> Skip subtitle processing (copy stream)</label>
+                        </div>
+                        <div class="form-group">
+                            <label><input type="checkbox" id="encSkipCoverArt" checked> Skip cover art / attached pictures</label>
+                        </div>
+
+                        <h3>Language Filtering</h3>
+                        <div class="form-group">
+                            <label><input type="checkbox" id="encFilterAudio"> Filter audio tracks by language</label>
+                        </div>
+                        <div class="form-group" id="encAudioLangsGroup" style="display: none;">
+                            <label for="encAudioLangs">Audio Languages:</label>
+                            <input type="text" id="encAudioLangs" placeholder="e.g., eng, jpn, spa" style="width: 100%; padding: 0.5rem;">
+                        </div>
+
+                        <div class="form-group">
+                            <label><input type="checkbox" id="encFilterSubs"> Filter subtitle tracks by language</label>
+                        </div>
+                        <div class="form-group" id="encSubsLangsGroup" style="display: none;">
+                            <label for="encSubLangs">Subtitle Languages:</label>
+                            <input type="text" id="encSubLangs" placeholder="e.g., eng, jpn, spa" style="width: 100%; padding: 0.5rem;">
+                        </div>
+                    </div>
+
+                    <!-- RIGHT COLUMN -->
+                    <div>
+                        <h3 style="margin-top: 0;">Bitrate Settings</h3>
+
+                        <div class="form-group">
+                            <label><input type="checkbox" id="encUseMinMaxBitrate"> Use Min/Max Bitrate Limits</label>
+                        </div>
+
+                        <div class="form-group">
+                            <label><input type="checkbox" id="encUseTargetBitrate"> Use Target Bitrate (disables CQ)</label>
+                        </div>
+
+                        <div id="bitrateSettingsContainer" style="background-color: var(--secondary-color); padding: 1rem; border-radius: 4px;">
+                            <!-- Low Resolution -->
+                            <div id="lowResBitrateGroup" style="display: none;">
+                                <h4>Below 720p</h4>
+                                <div class="form-group">
+                                    <label for="encMinLowRes">Min (kbps):</label>
+                                    <input type="number" id="encMinLowRes" value="500" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group">
+                                    <label for="encMaxLowRes">Max (kbps):</label>
+                                    <input type="number" id="encMaxLowRes" value="1000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group" id="encTargetLowResGroup" style="display: none;">
+                                    <label for="encTargetLowRes">Target (kbps):</label>
+                                    <input type="number" id="encTargetLowRes" value="800" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                            </div>
+
+                            <!-- 720p -->
+                            <div id="res720pBitrateGroup" style="display: none;">
+                                <h4>720p</h4>
+                                <div class="form-group">
+                                    <label for="encMin720p">Min (kbps):</label>
+                                    <input type="number" id="encMin720p" value="1000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group">
+                                    <label for="encMax720p">Max (kbps):</label>
+                                    <input type="number" id="encMax720p" value="2000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group" id="encTarget720pGroup" style="display: none;">
+                                    <label for="encTarget720p">Target (kbps):</label>
+                                    <input type="number" id="encTarget720p" value="1500" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                            </div>
+
+                            <!-- 1080p -->
+                            <div id="res1080pBitrateGroup" style="display: none;">
+                                <h4>1080p</h4>
+                                <div class="form-group">
+                                    <label for="encMin1080p">Min (kbps):</label>
+                                    <input type="number" id="encMin1080p" value="2000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group">
+                                    <label for="encMax1080p">Max (kbps):</label>
+                                    <input type="number" id="encMax1080p" value="4000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group" id="encTarget1080pGroup" style="display: none;">
+                                    <label for="encTarget1080p">Target (kbps):</label>
+                                    <input type="number" id="encTarget1080p" value="3000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                            </div>
+
+                            <!-- 1440p -->
+                            <div id="res1440pBitrateGroup" style="display: none;">
+                                <h4>1440p</h4>
+                                <div class="form-group">
+                                    <label for="encMin1440p">Min (kbps):</label>
+                                    <input type="number" id="encMin1440p" value="4000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group">
+                                    <label for="encMax1440p">Max (kbps):</label>
+                                    <input type="number" id="encMax1440p" value="6000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group" id="encTarget1440pGroup" style="display: none;">
+                                    <label for="encTarget1440p">Target (kbps):</label>
+                                    <input type="number" id="encTarget1440p" value="5000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                            </div>
+
+                            <!-- 4K -->
+                            <div id="res4kBitrateGroup" style="display: none;">
+                                <h4>4K</h4>
+                                <div class="form-group">
+                                    <label for="encMin4k">Min (kbps):</label>
+                                    <input type="number" id="encMin4k" value="6000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group">
+                                    <label for="encMax4k">Max (kbps):</label>
+                                    <input type="number" id="encMax4k" value="10000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                                <div class="form-group" id="encTarget4kGroup" style="display: none;">
+                                    <label for="encTarget4k">Target (kbps):</label>
+                                    <input type="number" id="encTarget4k" value="8000" style="width: 100%; padding: 0.5rem;">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="encCancelBtn" class="btn btn-secondary">Cancel</button>
+                <button id="encStartBtn" class="btn btn-primary">Start Encoding</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/utils.js"></script>
+    <script src="/static/js/dialogs.js"></script>
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

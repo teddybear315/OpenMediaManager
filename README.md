@@ -1,6 +1,6 @@
 # Open Media Manager
 
-A PyQt6-based GUI application for managing and re-encoding media files with intelligent quality standards and batch processing.
+A PyQt6-based GUI application and FastAPI-based web server for managing and re-encoding media files with intelligent quality standards and batch processing.
 
 ## Features
 
@@ -15,7 +15,9 @@ A PyQt6-based GUI application for managing and re-encoding media files with inte
 - 🎯 **Smart Detection**: Automatically detect TV shows, seasons, and episodes from filenames
 - ⚙️ **Configurable Settings**: Store encoding preferences and quality standards in a config file
 - 🎨 **Modern GUI**: Clean PyQt6 interface with tree view and progress tracking
-- 🚀 **Two Encoding Modes**: 
+- 🌐 **Web Server**: FastAPI-based remote interface accessible from any device
+- 📱 **Responsive Design**: Mobile, tablet, and desktop optimized layouts
+- 🚀 **Two Encoding Modes**:
   - **Reencode Selected**: Re-encode specific files you select
   - **Reencode HQ**: Only re-encode high-quality (1080p+) sources
 
@@ -46,17 +48,17 @@ A PyQt6-based GUI application for managing and re-encoding media files with inte
    ```
 
 4. **Install FFmpeg** (if not already installed):
-   
+
    **macOS**:
    ```bash
    brew install ffmpeg
    ```
-   
+
    **Ubuntu/Debian**:
    ```bash
    sudo apt-get install ffmpeg
    ```
-   
+
    **Windows**:
    Download from [ffmpeg.org](https://ffmpeg.org/download.html) and add to PATH
 
@@ -68,6 +70,27 @@ A PyQt6-based GUI application for managing and re-encoding media files with inte
 
 ## Usage
 
+### GUI Application
+
+**Start the GUI & Web Server (if enabled)**:
+```bash
+python main.py
+```
+
+Then open your browser to `http://localhost:8000/`
+
+**Custom host and port**:
+```bash
+python main.py --host 0.0.0.0 --port 8080
+```
+
+**Development mode (with auto-reload)**:
+```bash
+python main.py --reload
+```
+
+For detailed web server documentation, see [WEB_SERVER_GUIDE.md](WEB_SERVER_GUIDE.md).
+
 ### First Run
 
 1. **Start the application**:
@@ -77,7 +100,7 @@ A PyQt6-based GUI application for managing and re-encoding media files with inte
 
 2. **First Run Setup**: On first launch, you'll be prompted to configure:
    - **Media Path**: Default directory for your media files (with browse button)
-   - **Encoding Settings**: 
+   - **Encoding Settings**:
      - GPU acceleration (NVENC) - *disables thread count when enabled*
      - 10-bit encoding
      - Animation tuning
@@ -100,11 +123,11 @@ A PyQt6-based GUI application for managing and re-encoding media files with inte
 The application uses recommended bitrates from the original CLI tool:
 
 | Resolution | Min Bitrate | Max Bitrate | Recommended CQ |
-|-----------|-------------|-------------|----------------|
-| 720p      | 1000 kbps   | 2000 kbps   | 16-20         |
-| 1080p     | 2000 kbps   | 4000 kbps   | 18-25         |
-| 1440p     | 4000 kbps   | 6000 kbps   | 16-23         |
-| 4K        | 6000 kbps   | 10000 kbps  | 13-18         |
+| ---------- | ----------- | ----------- | -------------- |
+| 720p       | 1000 kbps   | 2000 kbps   | 16-20          |
+| 1080p      | 2000 kbps   | 4000 kbps   | 18-25          |
+| 1440p      | 4000 kbps   | 6000 kbps   | 16-23          |
+| 4K         | 6000 kbps   | 10000 kbps  | 13-18          |
 
 These defaults are defined in [constants.py](constants.py) for easy modification.
 
@@ -146,19 +169,12 @@ Click the arrows to expand/collapse sections and browse your library efficiently
 
 #### Re-encoding Files
 
-**Option 1: Reencode Selected**
-1. Select one or more files in the tree (Ctrl+Click or Cmd+Click)
+1. Select one or more files in the tree (Clicking multiple files selects and highlights them in red)
    - You can select individual episodes, entire seasons, or shows
    - Only actual media files (not group nodes) will be encoded
 2. Click **"Reencode Selected"**
 3. Confirm the operation
 4. Monitor progress in real-time
-
-**Option 2: Reencode HQ**
-1. Click **"Reencode HQ"**
-2. Only files with 1080p or higher resolution that need re-encoding will be processed
-3. Files below 1080p and files below quality standards are skipped
-4. Ideal for ensuring high-quality sources are optimally encoded
 
 #### Add Metadata Tool
 
@@ -166,7 +182,7 @@ The **"Add Metadata"** button opens a separate tool for adding cover art and/or 
 
 **Features:**
 1. **Target Folder Selection**: Choose a specific folder containing videos to modify
-2. **Cover Art**: 
+2. **Cover Art**:
    - Select a single image file (JPG, PNG) to add to all videos
    - Cover art will be embedded as an attached picture
 3. **Subtitles**:
@@ -176,12 +192,12 @@ The **"Add Metadata"** button opens a separate tool for adding cover art and/or 
 4. **Output**: Creates new files with `_metadata` suffix, preserving originals
 
 **Usage:**
-1. Click **"Add Metadata"** button
-2. Select target folder containing videos
+1. Select target folder containing videos
+2. Click **"Add Metadata"** button
 3. Check "Add cover art" and/or "Add subtitles"
 4. Configure options:
    - For cover art: Browse and select an image file
-   - For subtitles: 
+   - For subtitles:
      - Enter 3-letter language code (e.g., "eng", "jpn", "spa")
      - Choose folder search (finds `videoname.eng.srt` files) or per-video selection
 5. Click **"Process Videos"**
@@ -253,18 +269,18 @@ Based on your CLI tool readme, here are the recommended settings:
 
 ### Bitrate and Quality for x265
 
-| Resolution       | Bitrate  | CQ Value |
-|-----------------|----------|----------|
-| 720p            | 1-2 Mbps | 16-20    |
-| 1080p Animation | 1-3 Mbps | 20-25    |
-| 1080p           | 2-4 Mbps | 18-25    |
-| 1440p           | 4-6 Mbps | 16-23    |
-| 4K              | 6-10 Mbps| 13-18    |
+| Resolution      | Bitrate   | CQ Value |
+| --------------- | --------- | -------- |
+| 720p            | 1-2 Mbps  | 16-20    |
+| 1080p Animation | 1-3 Mbps  | 20-25    |
+| 1080p           | 2-4 Mbps  | 18-25    |
+| 1440p           | 4-6 Mbps  | 16-23    |
+| 4K              | 6-10 Mbps | 13-18    |
 
 ### Encoding Levels
 
-| Resolution  | FPS | Level |
-|------------|-----|-------|
+| Resolution | FPS | Level |
+| ---------- | --- | ----- |
 | 720×480    | 40  | 3.0   |
 | 1280×720   | 30  | 3.1   |
 | 1280×720   | 60  | 4.0   |
@@ -362,7 +378,7 @@ OpenMediaManager/
 
 **Centralized Constants**: All default values are in `constants.py` to avoid duplication and make customization easier.
 
-**Separate Quality Standards vs Encoding Settings**: 
+**Separate Quality Standards vs Encoding Settings**:
 - Quality Standards check if files are compliant (min/max bitrates)
 - Encoding Bitrate Settings control the actual encoding process
 - This separation provides flexibility in how you manage your library

@@ -95,7 +95,6 @@ DEFAULT_CONFIG = {
         "target_bitrate_1080p": 3000,  # Target bitrate for 1080p
         "target_bitrate_1440p": 5000,  # Target bitrate for 1440p
         "target_bitrate_4k": 8000,  # Target bitrate for 4K
-        "ignore_extras": True,  # Skip extras/bonus features during encoding
         "skip_video_encoding": False,  # Copy video without re-encoding
         "encoding_bitrate_min_low_res": RECOMMENDED_SETTINGS["low_res"]["min_bitrate"],
         "encoding_bitrate_max_low_res": RECOMMENDED_SETTINGS["low_res"]["max_bitrate"],
@@ -156,7 +155,14 @@ DEFAULT_CONFIG = {
         "show_pretty_output": True,
         "auto_compare_filesizes": True
     },
-    "manual_overrides": {}  # Store manual category/metadata overrides {file_path: {category, show_name, etc}}
+    "server": {
+        "host": "127.0.0.1",  # Server bind address
+        "port": 8000,  # Server port
+        "enable_reload": False,  # Auto-reload on file changes (development)
+        "run_webserver": True  # Start webserver automatically with GUI
+    },
+    "manual_overrides": {},  # Store manual category/metadata overrides {file_path: {category, show_name, etc}}
+    "encoding_presets": {}  # Store saved encoding profiles {profile_name: {settings}}
 }
 
 # Help text for UI tooltips and dialogs
