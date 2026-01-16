@@ -7,6 +7,7 @@ class OpenMediaManager {
         this.mediaFiles = [];
         this.selectedFiles = new Set();
         this.isEncoding = false;
+        this.isScanning = false;
         this.logWebSocket = null;
         this.settingsDialog = null;
         this.filteredFiles = [];
@@ -54,7 +55,14 @@ class OpenMediaManager {
 
     attachEventListeners() {
         // Header buttons
-        document.getElementById('scanBtn').addEventListener('click', () => this.scanMedia());
+        document.getElementById('scanBtn').addEventListener('click', () => {
+            if (this.isScanning) {
+                this.stopScan();
+            } else {
+                this.scanMedia();
+            }
+        });
+        document.getElementById('cleanupBtn').addEventListener('click', () => this.cleanupEncoded());
         document.getElementById('themeBtn').addEventListener('click', () => this.toggleTheme());
         document.getElementById('settingsBtn').addEventListener('click', () => this.settingsDialog.open());
 
@@ -71,6 +79,11 @@ class OpenMediaManager {
         const logSection = document.getElementById('logSection');
         const logHeader = logSection.querySelector('.section-header h2');
         logHeader.addEventListener('click', () => this.toggleLog());
+
+        // Media section - toggle visibility
+        const mediaSection = document.getElementById('mediaSection');
+        const mediaHeader = mediaSection.querySelector('.section-header h2');
+        mediaHeader.addEventListener('click', () => this.toggleMediaSection());
 
         // Log buttons
         document.getElementById('clearLogBtn').addEventListener('click', () => this.clearLog());
@@ -120,6 +133,10 @@ class OpenMediaManager {
                     document.getElementById('encodeBtn').style.display = 'none';
                     document.getElementById('stopEncodingBtn').style.display = 'inline-block';
                     document.getElementById('stopEncodingBtn').disabled = false;
+                    // Show progress containers on mobile
+                    document.getElementById('fileProgressContainer').classList.add('active');
+                    document.getElementById('batchProgressContainer').classList.add('active');
+                    document.getElementById('statisticsContainer').classList.add('active');
                     this.initializeEncodingLog(data.job_count);
                     Utils.Logger.info(`Joining encoding of ${data.job_count} files...`);
                     this.displayLog();
@@ -130,9 +147,36 @@ class OpenMediaManager {
                     const stopBtn = document.getElementById('stopEncodingBtn');
                     stopBtn.disabled = true;
                     stopBtn.textContent = 'Stop Encoding';
-                    Utils.Logger.success('Encoding completed successfully');
+
+                    // Hide progress bars but keep statistics visible
+                    document.getElementById('fileProgressContainer').classList.remove('active');
+                    document.getElementById('batchProgressContainer').classList.remove('active');
+                    // Keep statisticsContainer visible
+
+                    // Log encoding results summary
+                    const successful = data.successful || 0;
+                    const failed = data.failed || 0;
+                    const cancelled = data.cancelled || 0;
+
+                    Utils.Logger.success(`Encoding complete: ${successful} successful, ${failed} failed, ${cancelled} cancelled`);
+
+                    // Log cleanup results if auto-cleanup was enabled
+                    if (data.cleanup_results) {
+                        const results = data.cleanup_results;
+                        if (results.moved_files > 0) {
+                            Utils.Logger.success(`Auto-cleanup: Moved ${results.moved_files} smaller file(s) to replace originals`);
+                        }
+                        if (results.removed_expanded > 0) {
+                            Utils.Logger.info(`Auto-cleanup: Removed ${results.removed_expanded} expanded/broken file(s)`);
+                        }
+                        if (results.errors && results.errors.length > 0) {
+                            Utils.Logger.error(`Auto-cleanup errors: ${results.errors.length} file(s) failed`);
+                        }
+                    }
+
                     this.finalizeEncodingLog();
                     this.displayLog();
+                    // Note: No dialog shown - cleanup happened automatically per settings
                 } else if (data.type === 'encoding_stopped') {
                     this.isEncoding = false;
                     document.getElementById('encodeBtn').style.display = 'inline-block';
@@ -140,8 +184,16 @@ class OpenMediaManager {
                     const stopBtn = document.getElementById('stopEncodingBtn');
                     stopBtn.disabled = true;
                     stopBtn.textContent = 'Stop Encoding';
+                    // Hide progress containers after stop
+                    document.getElementById('fileProgressContainer').classList.remove('active');
+                    document.getElementById('batchProgressContainer').classList.remove('active');
+                    document.getElementById('statisticsContainer').classList.remove('active');
                     Utils.Logger.warning('Encoding stopped by user');
                     this.displayLog();
+                    // Show stopped dialog if there are partial files
+                    if (data.partial_files && data.partial_files.length > 0 || data.cancelled > 0) {
+                        this.showEncodingStoppedDialog(data);
+                    }
                 } else if (data.type === 'file_start') {
                     this.handleFileStart(data);
                 } else if (data.type === 'file_complete') {
@@ -168,14 +220,6 @@ class OpenMediaManager {
             totalEncodedSize: 0,
             fileStats: []
         };
-
-        // Show progress containers
-        document.getElementById('fileProgressContainer').style.display = 'block';
-        if (jobCount > 1) {
-            document.getElementById('batchProgressContainer').style.display = 'block';
-        }
-        document.getElementById('statisticsContainer').style.display = 'block';
-
 
     }
 
@@ -266,8 +310,8 @@ class OpenMediaManager {
         let text = `Encoding: ${displayName} | ${progress.toFixed(1)}% | FPS: ${fps.toFixed(0)} | ETA: ${eta}`;
 
         if (this.encodingLogState.totalFiles > 1 && data.batch_eta) {
-            text += ` | Batch ETA: ${data.batch_eta} (${this.encodingLogState.currentFile}/${this.encodingLogState.totalFiles})`;
             document.getElementById('batchProgressFill').style.width = `${data.batch_progress || 0}%`;
+            document.getElementById('batchProgressLabel').textContent = `Batch Progress: ${data.batch_eta} (${this.encodingLogState.currentFile}/${this.encodingLogState.totalFiles})`;
         }
 
         document.getElementById('fileProgressLabel').textContent = text;
@@ -322,8 +366,10 @@ class OpenMediaManager {
 
     async scanMedia() {
         const scanBtn = document.getElementById('scanBtn');
-        const wasDisabled = scanBtn.disabled;
-        scanBtn.disabled = true;
+        this.isScanning = true;
+        scanBtn.textContent = 'Stop Scan';
+        scanBtn.classList.add('btn-danger');
+        scanBtn.classList.remove('btn-primary');
 
         try {
             Utils.Logger.info('Starting media scan...');
@@ -341,7 +387,46 @@ class OpenMediaManager {
             Utils.Logger.error(`Scan failed: ${error.message}`);
             this.displayLog();
         } finally {
-            scanBtn.disabled = wasDisabled;
+            this.isScanning = false;
+            scanBtn.textContent = 'Scan Media';
+            scanBtn.classList.remove('btn-danger');
+            scanBtn.classList.add('btn-primary');
+        }
+    }
+
+    stopScan() {
+        // Currently, we can't interrupt the scan API call directly
+        // This would require server-side support for cancellation
+        Utils.Logger.info('Scan stop requested (continuing to completion)');
+    }
+
+    async cleanupEncoded() {
+        const cleanupBtn = document.getElementById('cleanupBtn');
+        cleanupBtn.disabled = true;
+
+        try {
+            Utils.Logger.info('Starting cleanup of encoded files...');
+            this.displayLog();
+            const result = await Utils.API.cleanupEncoded();
+
+            Utils.Logger.success(`Cleanup complete: ${result.successful} files processed`);
+            if (result.skipped > 0) {
+                Utils.Logger.info(`Skipped: ${result.skipped} file(s) (encoded was larger)`);
+            }
+            if (result.failed > 0) {
+                Utils.Logger.error(`Failed: ${result.failed} file(s)`);
+            }
+
+            this.displayLog();
+
+            // Trigger rescan to show updated file state
+            setTimeout(() => this.scanMedia(), 500);
+        } catch (error) {
+            console.error('Cleanup failed:', error);
+            Utils.Logger.error(`Cleanup failed: ${error.message}`);
+            this.displayLog();
+        } finally {
+            cleanupBtn.disabled = false;
         }
     }
 
@@ -350,6 +435,7 @@ class OpenMediaManager {
         const logDiv = document.getElementById('encodingLog');
         const header = logSection.querySelector('.section-header h2');
         const toggle = header.querySelector('.log-toggle');
+        const actions = logSection.querySelector('.section-actions');
 
         logSection.classList.toggle('collapsed');
 
@@ -357,10 +443,31 @@ class OpenMediaManager {
             this.logVisible = false;
             logDiv.classList.remove('visible');
             if (toggle) toggle.textContent = '▶';
+            if (actions) actions.classList.add('hidden');
         } else {
             this.logVisible = true;
             logDiv.classList.add('visible');
             if (toggle) toggle.textContent = '▼';
+            if (actions) actions.classList.remove('hidden');
+        }
+    }
+
+    toggleMediaSection() {
+        const mediaSection = document.getElementById('mediaSection');
+        const header = mediaSection.querySelector('.section-header h2');
+        const toggle = header.querySelector('.media-toggle');
+        const actions = mediaSection.querySelector('.section-actions');
+        const table = mediaSection.querySelector('.media-table-wrapper');
+
+        mediaSection.classList.toggle('collapsed');
+        table.classList.toggle('collapsed');
+
+        if (mediaSection.classList.contains('collapsed')) {
+            if (toggle) toggle.textContent = '▶';
+            if (actions) actions.classList.add('hidden');
+        } else {
+            if (toggle) toggle.textContent = '▼';
+            if (actions) actions.classList.remove('hidden');
         }
     }
 
@@ -429,7 +536,8 @@ class OpenMediaManager {
         // Build hierarchical structure
         if (Object.keys(shows).length > 0) {
             this.groupedFiles['Shows'] = shows;
-            // Auto-collapse all shows and their seasons
+            // Auto-collapse the Shows category and all shows and their seasons
+            this.collapsedGroups.add('Shows');
             Object.keys(shows).forEach(showName => {
                 const showKey = `Shows-${showName}`;
                 this.collapsedGroups.add(showKey);
@@ -448,6 +556,8 @@ class OpenMediaManager {
         }
         if (movies.length > 0) {
             this.groupedFiles['Movies'] = { 'Movies': movies };
+            // Auto-collapse Movies category
+            this.collapsedGroups.add('Movies');
         }
         if (Object.keys(extras).length > 0) {
             // Convert normalized extras map to display-keyed object for rendering
@@ -458,7 +568,8 @@ class OpenMediaManager {
             });
 
             this.groupedFiles['Extras'] = extrasDisplay;
-            // Calculate compliance status for extras groups (use display keys)
+            // Auto-collapse Extras category and all extras groups
+            this.collapsedGroups.add('Extras');
             Object.keys(extrasDisplay).forEach(extraGroup => {
                 const extraKey = `Extras-${extraGroup}`;
                 this.collapsedGroups.add(extraKey);
@@ -627,7 +738,12 @@ class OpenMediaManager {
                         // Movies or other categories - handle flat lists
                         if (Array.isArray(seasonsOrFiles)) {
                             // Flat list (Movies)
-                            html += seasonsOrFiles.map((file) => this.renderFileRow(file, categoryKey)).join('');
+                            html += seasonsOrFiles.map((file) => {
+                                const fileRow = this.renderFileRow(file, categoryKey);
+                                // Add hidden class to file rows if category is collapsed
+                                const hiddenClass = isCategoryCollapsed ? ' hidden' : '';
+                                return fileRow.replace('<tr class="media-row group-child', `<tr class="media-row group-child${hiddenClass}`);
+                            }).join('');
                         }
                     }
                 });
@@ -948,6 +1064,10 @@ class OpenMediaManager {
 
             document.getElementById('encodeBtn').disabled = true;
             Utils.Logger.info(`Starting encoding of ${count} files with settings: ${JSON.stringify(encodingSettings)}`);
+            // Show progress containers on mobile
+            document.getElementById('fileProgressContainer').classList.add('active');
+            document.getElementById('batchProgressContainer').classList.add('active');
+            document.getElementById('statisticsContainer').classList.add('active');
             this.displayLog();
 
             const result = await Utils.API.startEncoding(Array.from(this.selectedFiles), encodingSettings);
@@ -1033,6 +1153,69 @@ class OpenMediaManager {
     clearLog() {
         Utils.Logger.clear();
         this.displayLog();
+        document.getElementById('fileProgressContainer').classList.remove('active');
+        document.getElementById('batchProgressContainer').classList.remove('active');
+        document.getElementById('statisticsContainer').classList.remove('active');
+    }
+
+    showEncodingStoppedDialog(data) {
+        // Update summary
+        document.getElementById('stoppedSuccessful').textContent = data.successful || 0;
+        document.getElementById('stoppedCancelled').textContent = data.cancelled || 0;
+        document.getElementById('stoppedFailed').textContent = data.failed || 0;
+
+        // Show/hide partial files section
+        const partialSection = document.getElementById('partialFilesSection');
+        const deleteBtn = document.getElementById('deletePartialBtn');
+        if (data.partial_files && data.partial_files.length > 0) {
+            document.getElementById('partialFileCount').textContent = data.partial_files.length;
+            partialSection.classList.add('show');
+            deleteBtn.classList.add('show');
+        } else {
+            partialSection.classList.remove('show');
+            deleteBtn.classList.remove('show');
+        }
+
+        // Show modal
+        document.getElementById('encodingStoppedModal').classList.add('show');
+    }
+}
+
+// Global dialog functions
+function closeEncodingStoppedDialog() {
+    document.getElementById('encodingStoppedModal').classList.remove('show');
+    // Trigger rescan after closing
+    if (app) {
+        app.scanMedia();
+    }
+}
+
+async function deletePartialFiles() {
+    if (!confirm('Delete all partial encoded files?')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/encode/cleanup-partial', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+            let message = `Deleted ${result.deleted} partial file(s).`;
+            if (result.failed > 0) {
+                message += `\nFailed to delete ${result.failed} file(s).`;
+            }
+            alert(message);
+            closeEncodingStoppedDialog();
+        } else {
+            alert('Cleanup failed: ' + (result.message || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Partial cleanup error:', error);
+        alert('Failed to delete partial files: ' + error.message);
     }
 }
 

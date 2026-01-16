@@ -3,6 +3,16 @@ GUI Components for Open Media Manager
 Main window, dialogs, and custom widgets.
 """
 
+import asyncio
+import json
+import threading
+
+import requests
+
+try:
+    import websocket
+except ImportError:
+    websocket = None
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -2394,6 +2404,9 @@ class RecategorizeDialog(QDialog):
 class MainWindow(QMainWindow):
     """Main application window."""
 
+    # Signal for server encoding events (from WebSocket thread to main thread)
+    server_encoding_event = pyqtSignal(dict)
+
     def __init__(self, config_manager: ConfigManager):
         """
         Initialize the main window.
@@ -2409,6 +2422,9 @@ class MainWindow(QMainWindow):
         self.scan_thread: Optional[ScanThread] = None
         self.encoder: Optional[BatchEncoder] = None
         self.encoding_thread: Optional[EncodingThread] = None
+        self.encoding_log_dialog: Optional[EncodingLogDialog] = None
+        self.ws_thread: Optional[threading.Thread] = None
+        self.ws_connected = False
 
         self.setWindowTitle("Open Media Manager")
         self.setMinimumSize(1200, 700)
@@ -2416,14 +2432,295 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._init_scanner()
 
+        # Connect signal for server encoding events
+        self.server_encoding_event.connect(self._handle_server_encoding_event)
+
+        # Start WebSocket listener in background thread
+        self.ws_thread = threading.Thread(target=self._listen_to_server, daemon=True)
+        self.ws_thread.start()
+
+        # Start periodic server status polling
+        self.status_poll_timer = QTimer()
+        self.status_poll_timer.timeout.connect(self._poll_server_status)
+        self.status_poll_timer.start(2000)  # Poll every 2 seconds
+
         # Trigger scan on startup if media path is configured
         QTimer.singleShot(100, self._startup_scan)
+
+    def _poll_server_status(self):
+        """Periodically check server encoding status and update UI accordingly."""
+        try:
+            server_config = self.config.get("server", {})
+            server_host = server_config.get("host", "127.0.0.1")
+            server_port = server_config.get("port", 8000)
+
+            # Use localhost for 0.0.0.0 binds
+            if server_host == "0.0.0.0":
+                server_host = "127.0.0.1"
+
+            response = requests.get(f"http://{server_host}:{server_port}/api/encode/status", timeout=1)
+            if response.status_code == 200:
+                data = response.json()
+                is_running = data.get("is_running", False)
+
+                # Debug logging
+                if is_running:
+                    print(f"[GUI] Server is encoding: {is_running}, job_count: {data.get('job_count', 0)}")
+
+                # Update UI based on server state
+                if is_running:
+                    # Encoding is active on server
+                    if not self.encoding_log_dialog or not self.encoding_log_dialog.isVisible():
+                        # Open encoding log dialog if not visible
+                        job_count = data.get("job_count", 1)
+                        print(f"[GUI] Opening EncodingLogDialog with {job_count} jobs")
+                        self.encoding_log_dialog = EncodingLogDialog(self, total_files=job_count)
+                        self.encoding_log_dialog.stop_requested.connect(self._stop_operation)
+                        self.encoding_log_dialog.show()
+                        self.encoding_log_dialog.log_message("Detected active encoding on server...", "#4a9eff")
+
+                    # # Show stop button
+                    # if hasattr(self, 'stop_btn'):
+                    #     self.stop_btn.show()
+                    if hasattr(self, 'reencode_selected_btn'):
+                        self.reencode_selected_btn.setText("⏹ Stop Encoding")
+                        self.reencode_selected_btn.setStyleSheet("QPushButton { background-color: #dc3545; color: white; }")
+
+                    # Show progress bars
+                    if hasattr(self, 'batch_progress_bar') and not self.batch_progress_bar.isVisible():
+                        self.batch_progress_bar.show()
+                        self.batch_progress_bar.setMaximum(data.get("job_count", 1))
+                    if hasattr(self, 'file_progress_bar') and not self.file_progress_bar.isVisible():
+                        self.file_progress_bar.show()
+                        self.file_progress_bar.setMaximum(100)
+                else:
+                    # No encoding active
+                    # if hasattr(self, 'stop_btn'):
+                    #     self.stop_btn.hide()
+                    if hasattr(self, 'reencode_selected_btn'):
+                        self.reencode_selected_btn.setText("Reencode Selected")
+                        self.reencode_selected_btn.setStyleSheet("")
+                    if hasattr(self, 'batch_progress_bar'):
+                        self.batch_progress_bar.hide()
+                    if hasattr(self, 'file_progress_bar'):
+                        self.file_progress_bar.hide()
+        except Exception as e:
+            # Log errors for debugging
+            print(f"[GUI] Error polling server status: {e}")
+
+    def _handle_server_encoding_event(self, event_data: dict):
+        """Handle server encoding events from WebSocket (runs in main Qt thread)."""
+        event_type = event_data.get("type")
+
+        if event_type == "encoding_start":
+            job_count = event_data.get("job_count", 0)
+            # Open encoding log dialog if not already open
+            if not self.encoding_log_dialog or not self.encoding_log_dialog.isVisible():
+                print(f"[GUI] WebSocket: Opening EncodingLogDialog with {job_count} jobs")
+                self.encoding_log_dialog = EncodingLogDialog(self, total_files=job_count)
+                self.encoding_log_dialog.stop_requested.connect(self._stop_operation)
+                self.encoding_log_dialog.show()
+                self.encoding_log_dialog.log_message("Encoding started from web client...", "#4a9eff")
+
+            # Show stop button and progress bars
+            # if hasattr(self, 'stop_btn'):
+            #     self.stop_btn.show()
+            if hasattr(self, 'reencode_selected_btn'):
+                self.reencode_selected_btn.setText("⏹ Stop Encoding")
+                self.reencode_selected_btn.setStyleSheet("QPushButton { background-color: #dc3545; color: white; }")
+
+            # Show progress bars
+            if hasattr(self, 'batch_progress_bar'):
+                self.batch_progress_bar.show()
+                self.batch_progress_bar.setMaximum(job_count)
+                self.batch_progress_bar.setValue(0)
+            if hasattr(self, 'file_progress_bar'):
+                self.file_progress_bar.show()
+                self.file_progress_bar.setMaximum(100)
+                self.file_progress_bar.setValue(0)
+
+        elif event_type == "log" and self.encoding_log_dialog:
+            msg = event_data.get("message", "")
+            color = event_data.get("color", "#d4d4d4")
+            self.encoding_log_dialog.log_message(msg, color)
+
+        elif event_type == "file_start" and self.encoding_log_dialog:
+            filename = event_data.get("filename", "")
+            self.encoding_log_dialog.log_file_start(filename, filename)
+
+        elif event_type == "file_progress":
+            # Update progress bars
+            progress = event_data.get("progress", 0)
+            job_index = event_data.get("job_index", 0)
+            filename = event_data.get("filename", "")
+            fps = event_data.get("fps", 0)
+            eta = event_data.get("eta", "--:--")
+
+            if hasattr(self, 'file_progress_bar'):
+                self.file_progress_bar.setValue(int(progress))
+            if hasattr(self, 'batch_progress_bar'):
+                self.batch_progress_bar.setValue(job_index)
+
+            # Update encoding log dialog progress
+            if self.encoding_log_dialog:
+                self.encoding_log_dialog.update_file_progress(progress, fps, eta, filename)
+
+        elif event_type == "file_complete" and self.encoding_log_dialog:
+            filename = event_data.get("filename", "")
+            success = event_data.get("success", True)
+            original_size = event_data.get("original_size", 0)
+            encoded_size = event_data.get("encoded_size", 0)
+
+            # Log with size information if available
+            if original_size > 0 and encoded_size > 0:
+                self.encoding_log_dialog.log_file_complete(
+                    filename, filename, original_size, encoded_size, success
+                )
+            else:
+                color = "#4caf50" if success else "#ff6b6b"
+                self.encoding_log_dialog.log_message(f"Completed: {filename}", color)
+
+            # Increment batch progress
+            if hasattr(self, 'batch_progress_bar'):
+                current_value = self.batch_progress_bar.value()
+                self.batch_progress_bar.setValue(current_value + 1)
+
+        elif event_type == "encoding_complete":
+            # Log cleanup results if present
+            cleanup_results = event_data.get("cleanup_results", {})
+            cleanup_settings = event_data.get("cleanup_settings", {})
+
+            if self.encoding_log_dialog:
+                self.encoding_log_dialog.log_message("Encoding complete!", "#51cf66")
+
+                # Log auto-cleanup results
+                if cleanup_results:
+                    if cleanup_results.get("moved_files", 0) > 0:
+                        self.encoding_log_dialog.log_message(
+                            f"Auto-cleanup: Moved {cleanup_results['moved_files']} smaller file(s) to replace originals",
+                            "#51cf66"
+                        )
+                    if cleanup_results.get("removed_expanded", 0) > 0:
+                        self.encoding_log_dialog.log_message(
+                            f"Auto-cleanup: Removed {cleanup_results['removed_expanded']} expanded/broken file(s)",
+                            "#4a9eff"
+                        )
+                    if cleanup_results.get("errors") and len(cleanup_results["errors"]) > 0:
+                        self.encoding_log_dialog.log_message(
+                            f"Auto-cleanup errors: {len(cleanup_results['errors'])} file(s) failed",
+                            "#ff6b6b"
+                        )
+
+                self.encoding_log_dialog.encoding_complete()
+
+            # Hide stop button and progress bars
+            # if hasattr(self, 'stop_btn'):
+            #     self.stop_btn.hide()
+            if hasattr(self, 'reencode_selected_btn'):
+                self.reencode_selected_btn.setText("Reencode Selected")
+                self.reencode_selected_btn.setStyleSheet("")
+            if hasattr(self, 'batch_progress_bar'):
+                self.batch_progress_bar.hide()
+            if hasattr(self, 'file_progress_bar'):
+                self.file_progress_bar.hide()
+
+            # Close the encoding log dialog and rescan for web-initiated encodes
+            # This allows the Python GUI to reflect the completed encoding (files moved/deleted by auto-cleanup)
+            try:
+                if hasattr(self, 'encoding_log_dialog') and self.encoding_log_dialog:
+                    # Use a small delay to ensure dialog has time to finalize its state
+                    self.encoding_log_dialog.close()
+                    self.encoding_log_dialog = None
+
+                # Trigger rescan to show updated file state after auto-cleanup
+                self._rescan()
+            except Exception as e:
+                print(f"[WARNING] Dialog close/rescan after web encoding failed: {e}")
+
+        elif event_type == "encoding_stopped":
+            if self.encoding_log_dialog:
+                self.encoding_log_dialog.log_message("Encoding stopped by user", "#ff9800")
+
+            # Hide stop button and progress bars
+            # if hasattr(self, 'stop_btn'):
+            #     self.stop_btn.hide()
+            if hasattr(self, 'reencode_selected_btn'):
+                self.reencode_selected_btn.setText("Reencode Selected")
+                self.reencode_selected_btn.setStyleSheet("")
+            if hasattr(self, 'batch_progress_bar'):
+                self.batch_progress_bar.hide()
+            if hasattr(self, 'file_progress_bar'):
+                self.file_progress_bar.hide()
 
     def _startup_scan(self):
         """Trigger initial scan if media path is configured."""
         media_path = self.config.get("media_path", "")
         if media_path:
             self._rescan()
+
+    def _is_server_encoding(self) -> bool:
+        """Check if server currently has an active encoding job."""
+        try:
+            server_config = self.config.get("server", {})
+            server_host = server_config.get("host", "127.0.0.1")
+            server_port = server_config.get("port", 8000)
+
+            # Use localhost for 0.0.0.0 binds
+            if server_host == "0.0.0.0":
+                server_host = "127.0.0.1"
+
+            response = requests.get(f"http://{server_host}:{server_port}/api/encode/status", timeout=2)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("is_running", False)
+        except Exception as e:
+            print(f"[GUI] Could not check server status: {e}")
+        return False
+
+    def _listen_to_server(self):
+        """Listen to WebSocket messages from the server."""
+        if not websocket:
+            print("[GUI] websocket library not installed, skipping server log listener")
+            return
+
+        server_config = self.config.get("server", {})
+        server_host = server_config.get("host", "127.0.0.1")
+        server_port = server_config.get("port", 8000)
+
+        # Use localhost for 0.0.0.0 binds
+        if server_host == "0.0.0.0":
+            server_host = "127.0.0.1"
+
+        ws_url = f"ws://{server_host}:{server_port}/ws/logs"
+
+        while True:
+            try:
+                ws = websocket.create_connection(ws_url)
+                self.ws_connected = True
+                print(f"[GUI] Connected to encoding log stream: {ws_url}")
+
+                while self.ws_connected:
+                    try:
+                        msg = ws.recv()
+                        if msg:
+                            data = json.loads(msg)
+                            # Emit signal for main thread to handle
+                            self.server_encoding_event.emit(data)
+
+                    except websocket.WebSocketTimeoutException:
+                        continue
+                    except Exception as e:
+                        print(f"[GUI] WebSocket receive error: {e}")
+                        break
+
+                ws.close()
+                self.ws_connected = False
+
+            except Exception as e:
+                print(f"[GUI] WebSocket connection error: {e}")
+                # Retry connection after 5 seconds
+                import time
+                time.sleep(5)
 
     def _setup_ui(self):
         """Set up the UI components."""
@@ -2441,11 +2738,9 @@ class MainWindow(QMainWindow):
         self.rescan_btn.clicked.connect(self._rescan)
         toolbar.addWidget(self.rescan_btn)
 
-        self.stop_btn = QPushButton("⏹ Stop")
-        self.stop_btn.clicked.connect(self._stop_operation)
-        self.stop_btn.hide()  # Hidden by default
-        self.stop_btn.setStyleSheet("QPushButton { background-color: #dc3545; color: white; }")
-        toolbar.addWidget(self.stop_btn)
+        self.stop_scan_btn = QPushButton("⏹ Stop Scan")
+        self.stop_scan_btn.clicked.connect(self._stop_scan)
+        toolbar.addWidget(self.stop_scan_btn)
 
         self.metadata_btn = QPushButton("Add Metadata")
         self.metadata_btn.clicked.connect(self._open_metadata_tool)
@@ -2546,10 +2841,31 @@ class MainWindow(QMainWindow):
             self.scan_thread.stop()
             self.status_label.setText("Stopping scan...")
 
-        # Stop encoding if active
+        # Stop encoding if active (local)
         if self.encoder and self.encoder.is_running:
             self.encoder.stop_encoding()
             self.status_label.setText("Stopping encoding...")
+
+        # Also try to stop server-side encoding
+        try:
+            server_config = self.config.get("server", {})
+            server_host = server_config.get("host", "127.0.0.1")
+            server_port = server_config.get("port", 8000)
+
+            # Use localhost for 0.0.0.0 binds
+            if server_host == "0.0.0.0":
+                server_host = "127.0.0.1"
+
+            stop_url = f"http://{server_host}:{server_port}/api/encode/stop"
+            requests.post(stop_url, timeout=5)
+        except Exception as e:
+            print(f"[GUI] Failed to stop server encoding: {e}")
+
+    def _stop_scan(self):
+        """Stop current scan operation."""
+        if self.scan_thread and self.scan_thread.isRunning():
+            self.scan_thread.stop()
+            self.status_label.setText("Stopping scan...")
 
     def _rescan(self):
         """Rescan the media path from settings."""
@@ -2873,7 +3189,7 @@ class MainWindow(QMainWindow):
         self.batch_progress_bar.show()
         self.batch_progress_bar.setMaximum(0)  # Indeterminate
         self.rescan_btn.setEnabled(False)
-        self.stop_btn.show()
+        self.stop_scan_btn.show()
         self.reencode_selected_btn.setEnabled(False)
 
         # Create and start scan thread
@@ -2897,7 +3213,7 @@ class MainWindow(QMainWindow):
         """
         self.media_files = media_files
         self.batch_progress_bar.hide()
-        self.stop_btn.hide()
+        self.stop_scan_btn.hide()
         self.rescan_btn.setEnabled(True)
         self.reencode_selected_btn.setEnabled(True)
 
@@ -3156,9 +3472,12 @@ class MainWindow(QMainWindow):
     def _reencode_or_stop(self):
         """Either start re-encoding or stop current encoding based on state."""
         if hasattr(self, 'encoding_thread') and self.encoding_thread and self.encoding_thread.isRunning():
-            # Currently encoding - stop it
+            # Currently encoding locally - stop it
             if hasattr(self, 'encoder'):
                 self.encoder.stop()
+        elif self._is_server_encoding():
+            # Server is encoding - stop it
+            self._stop_operation()
         else:
             # Not encoding - start encoding
             self._reencode_selected()
@@ -3198,6 +3517,15 @@ class MainWindow(QMainWindow):
         Args:
             files: List of MediaInfo to encode.
         """
+        # Check if server has an active encoding job
+        if self._is_server_encoding():
+            QMessageBox.warning(
+                self, "Encoding In Progress",
+                "An encoding job is already running on the server. "
+                "Please wait for it to complete or stop it first."
+            )
+            return
+
         # Show pre-encode settings dialog
         settings_dialog = PreEncodeSettingsDialog(self.config, files, self, config_manager=self.config_manager)
         if settings_dialog.exec() != QDialog.DialogCode.Accepted:
@@ -3223,7 +3551,7 @@ class MainWindow(QMainWindow):
 
         # Create and show encoding log dialog
         self.encoding_log_dialog = EncodingLogDialog(self, total_files=len(jobs), jobs=jobs)
-        self.encoding_log_dialog.stop_requested.connect(self.encoder.stop)
+        self.encoding_log_dialog.stop_requested.connect(self.encoder.stop_encoding)
         self.encoding_log_dialog.show()
         self.encoding_log_dialog.log_message("Starting encoding process...", "#4a9eff")
         self.encoding_log_dialog.log_message(f"Total files to encode: {len(jobs)}", "#4a9eff")
@@ -3264,7 +3592,7 @@ class MainWindow(QMainWindow):
         self.reencode_selected_btn.setEnabled(True)
         self.reencode_selected_btn.setText("⏹ Stop Encoding")
         self.reencode_selected_btn.setStyleSheet("QPushButton { background-color: #dc3545; color: white; }")
-        self.stop_btn.show()
+        # self.stop_btn.show()
 
         self.encoding_thread.start()
 
@@ -3396,7 +3724,7 @@ class MainWindow(QMainWindow):
         """Handle completion of all encoding jobs."""
         self.batch_progress_bar.hide()
         self.file_progress_bar.hide()
-        self.stop_btn.hide()
+        # self.stop_btn.hide()
         self.rescan_btn.setEnabled(True)
         self.reencode_selected_btn.setEnabled(True)
         self.reencode_selected_btn.setText("Reencode Selected")

@@ -358,14 +358,12 @@ class EncodingSettingsDialog {
         useTargetBitrate?.addEventListener('change', () => {
             const enabled = !useTargetBitrate.checked;
             cqField.disabled = !enabled;
-            cqField.style.opacity = enabled ? '1' : '0.5';
             this._updateTargetBitrateVisibility();
         });
 
         useGPU?.addEventListener('change', () => {
             const enabled = !useGPU.checked;
             threadCountField.disabled = !enabled;
-            threadCountField.style.opacity = enabled ? '1' : '0.5';
         });
 
         useMinMaxBitrate?.addEventListener('change', () => {
@@ -374,12 +372,12 @@ class EncodingSettingsDialog {
 
         filterAudio?.addEventListener('change', () => {
             const group = document.getElementById('encAudioLangsGroup');
-            if (group) group.style.display = filterAudio.checked ? 'block' : 'none';
+            if (group) group.classList.toggle('form-group-hidden', !filterAudio.checked);
         });
 
         filterSubs?.addEventListener('change', () => {
             const group = document.getElementById('encSubsLangsGroup');
-            if (group) group.style.display = filterSubs.checked ? 'block' : 'none';
+            if (group) group.classList.toggle('form-group-hidden', !filterSubs.checked);
         });
     }
 
@@ -422,17 +420,14 @@ class EncodingSettingsDialog {
         document.getElementById('encCodec').value = enc.codec_type || 'x265';
         document.getElementById('encPreset').value = enc.preset || 'veryfast';
         document.getElementById('encCQ').value = enc.cq || 22;
-        document.getElementById('encLevel').value = enc.level || '';  // Default to auto
+        // Set level, converting 'auto' to empty string for "Auto (ignore)" option
+        const levelField = document.getElementById('encLevel');
+        const levelValue = enc.level || '';
+        levelField.value = (levelValue.toLowerCase && levelValue.toLowerCase() === 'auto') ? '' : levelValue;
 
-        // Convert bit_depth_preference to form values
+        // Set bit_depth_preference to option value (defaults to 'source')
         const bitDepthPref = enc.bit_depth_preference || 'source';
-        if (bitDepthPref === 'force_8bit') {
-            document.getElementById('encBitDepth').value = 'Force 8-bit';
-        } else if (bitDepthPref === 'force_10bit') {
-            document.getElementById('encBitDepth').value = 'Force 10-bit';
-        } else {
-            document.getElementById('encBitDepth').value = 'Match source';
-        }
+        document.getElementById('encBitDepth').value = bitDepthPref;
 
         document.getElementById('encUseGPU').checked = enc.use_gpu || false;
         document.getElementById('encThreads').value = enc.thread_count || 4;
@@ -443,6 +438,11 @@ class EncodingSettingsDialog {
         document.getElementById('encSkipCoverArt').checked = enc.skip_cover_art !== false;
         document.getElementById('encUseMinMaxBitrate').checked = enc.use_bitrate_limits || false;
         document.getElementById('encUseTargetBitrate').checked = enc.use_target_bitrate || false;
+
+        // Update conditional field states based on initial values
+        this._updateBitrateFieldsState();
+        this._updateTargetBitrateVisibility();
+        this._updateGPUFieldState();
 
         // Initialize bitrate settings
         document.getElementById('encMinLowRes').value = enc.encoding_bitrate_min_low_res || 500;
@@ -499,17 +499,14 @@ class EncodingSettingsDialog {
         document.getElementById('encCodec').value = preset.codec_type || 'x265';
         document.getElementById('encPreset').value = preset.preset || 'veryfast';
         document.getElementById('encCQ').value = preset.cq || 22;
-        document.getElementById('encLevel').value = preset.level || '';  // Default to auto
+        // Set level, converting 'auto' to empty string for "Auto (ignore)" option
+        const levelField = document.getElementById('encLevel');
+        const levelValue = preset.level || '';
+        levelField.value = (levelValue.toLowerCase && levelValue.toLowerCase() === 'auto') ? '' : levelValue;
 
-        // Convert bit_depth_preference to form values
+        // Set bit_depth_preference to option value (defaults to 'source')
         const bitDepthPref = preset.bit_depth_preference || 'source';
-        if (bitDepthPref === 'force_8bit') {
-            document.getElementById('encBitDepth').value = 'Force 8-bit';
-        } else if (bitDepthPref === 'force_10bit') {
-            document.getElementById('encBitDepth').value = 'Force 10-bit';
-        } else {
-            document.getElementById('encBitDepth').value = 'Match source';
-        }
+        document.getElementById('encBitDepth').value = bitDepthPref;
 
         document.getElementById('encUseGPU').checked = preset.use_gpu || false;
         document.getElementById('encThreads').value = preset.thread_count || 4;
@@ -575,9 +572,12 @@ class EncodingSettingsDialog {
         document.getElementById('encFilterSubs').checked = preset.subtitle_filter_enabled || false;
         document.getElementById('encSubLangs').value = (preset.subtitle_languages || ['eng']).join(', ');
 
-        // Update bitrate field visibility based on profile settings
+        // Update field availability based on profile settings
         this._updateBitrateFieldsState();
         this._updateTargetBitrateVisibility();
+        this._updateGPUFieldState();
+        this._updateCQFieldState();
+        this._updateLanguageFilterVisibility();
 
         this.currentProfile = name;
     }
@@ -739,6 +739,10 @@ class EncodingSettingsDialog {
             settings['subtitle_languages'] = subLangsInput.value.split(',').map(l => l.trim()).filter(l => l);
         }
 
+        // Post-encode cleanup settings
+        settings['auto_remove_broken'] = document.getElementById('encAutoRemoveBroken').checked;
+        settings['auto_move_smaller'] = document.getElementById('encAutoMoveSmaller').checked;
+
         // Resolve with settings and close dialog
         if (this._resolveDialog) {
             this._resolveDialog(settings);
@@ -785,13 +789,42 @@ class EncodingSettingsDialog {
         });
     }
 
+    _updateGPUFieldState() {
+        const useGPU = document.getElementById('encUseGPU').checked;
+        const threadCountField = document.getElementById('encThreads');
+        if (threadCountField) {
+            threadCountField.disabled = useGPU;
+        }
+    }
+
+    _updateCQFieldState() {
+        const useTargetBitrate = document.getElementById('encUseTargetBitrate').checked;
+        const cqField = document.getElementById('encCQ');
+        if (cqField) {
+            cqField.disabled = useTargetBitrate;
+        }
+    }
+
+    _updateLanguageFilterVisibility() {
+        const filterAudio = document.getElementById('encFilterAudio').checked;
+        const audioGroup = document.getElementById('encAudioLangsGroup');
+        if (audioGroup) {
+            audioGroup.classList.toggle('form-group-hidden', !filterAudio);
+        }
+
+        const filterSubs = document.getElementById('encFilterSubs').checked;
+        const subsGroup = document.getElementById('encSubsLangsGroup');
+        if (subsGroup) {
+            subsGroup.classList.toggle('form-group-hidden', !filterSubs);
+        }
+    }
+
     _updateBitrateFieldsState() {
         const useMinMax = document.getElementById('encUseMinMaxBitrate').checked;
         const bitrateFields = document.querySelectorAll('[id^="encMin"], [id^="encMax"], [id^="encTarget"]');
 
         bitrateFields.forEach(field => {
             field.disabled = !useMinMax;
-            field.style.opacity = useMinMax ? '1' : '0.5';
         });
     }
 }

@@ -54,7 +54,7 @@ class BatchEncoder(QObject):
         self.is_running = False
         self.should_stop = False
         self.current_process: Optional[subprocess.Popen] = None
-        
+
         # Callback-based handlers (for non-Qt contexts like web server)
         self.on_log: Optional[Callable] = None
         self.on_progress: Optional[Callable] = None
@@ -77,6 +77,41 @@ class BatchEncoder(QObject):
         self.job_complete.emit(job_index, success, message)
         if self.on_job_complete:
             self.on_job_complete(job_index, success, message)
+
+    def _is_filename_valid(self, filepath: Path) -> bool:
+        """
+        Check if a filename contains characters that would be invalid in filesystem paths.
+        Parentheses, brackets, and common special characters are allowed.
+        Only blocks unusual characters that FFmpeg cannot handle (like unicode quotation marks).
+
+        Args:
+            filepath: Path to check.
+
+        Returns:
+            True if valid, False if contains invalid characters.
+        """
+        # Only block truly problematic characters:
+        # - Standard invalid filesystem chars: < > : | ? *
+        # - Double quotes (but single quotes allowed)
+        # - Unicode quotation mark variations
+        invalid_chars = {
+            '<', '>', '|', '?', '*',  # Standard invalid chars (removed ':' as it can appear in paths)
+            '"',  # Double quotes
+            '\u201c', '\u201d',  # " " (curly quotes)
+            '\u00ab', '\u00bb',  # « » (guillemets)
+            '\u201f', '\u2039', '\u203a',  # ‟ ‹ › (other variations)
+            '\u2018', '\u2019',  # ' ' (single curly quotes)
+            '\u201a', '\u201e',  # ‚ „ (low quotes)
+        }
+
+        # Check each part of the path
+        for part in filepath.parts:
+            for char in invalid_chars:
+                if char in part:
+                    print(f"[VALIDATION] Invalid character '{char}' (U+{ord(char):04X}) found in path part: {part}")
+                    return False
+
+        return True
 
     def prepare_jobs(self, media_files: List[MediaInfo]) -> List[EncodingJob]:
         """
@@ -289,6 +324,24 @@ class BatchEncoder(QObject):
             job.status = "cancelled"
             return
 
+        # Check if source filename is valid
+        if not self._is_filename_valid(job.media_info.path):
+            error_msg = f"Skipped: filename contains invalid characters ({job.media_info.filename})"
+            job.status = "skipped"
+            job.error_message = error_msg
+            self._emit_log("warning", error_msg, "")
+            self._emit_job_complete(job_index, False, error_msg)
+            return
+
+        # Check if output path is valid
+        if not self._is_filename_valid(job.output_path):
+            error_msg = f"Skipped: output path contains invalid characters ({job.output_path.name})"
+            job.status = "skipped"
+            job.error_message = error_msg
+            self._emit_log("warning", error_msg, "")
+            self._emit_job_complete(job_index, False, error_msg)
+            return
+
         try:
             job.status = "encoding"
             self._emit_progress(job_index, 0.0, "Starting encoding...", 0.0, "--:--")
@@ -492,23 +545,31 @@ class BatchEncoder(QObject):
             if process.returncode == 0:
                 # Check if output file was created and has content
                 if job.output_path.exists() and job.output_path.stat().st_size > 0:
-                    job.status = "complete"
-
                     # Compare file sizes
                     original_size = job.media_info.file_size
                     new_size = job.output_path.stat().st_size
                     size_diff = original_size - new_size
                     size_diff_pct = (size_diff / original_size * 100) if original_size > 0 else 0
 
-                    # Optionally rename if configured
-                    if self.naming_params.get("rename_files", True):
-                        self._rename_output(job)
+                    # Check if reduction is suspiciously high (indicates corruption/failure)
+                    if size_diff_pct >= 90:
+                        job.status = "failed"
+                        error_msg = f"Encoded file is 90%+ smaller than original ({size_diff_pct:.1f}% reduction) - likely corrupted"
+                        job.error_message = error_msg
+                        self._emit_progress(job_index, 100.0, "Complete", 0.0, "00:00")
+                        self._emit_job_complete(job_index, False, error_msg)
+                    else:
+                        job.status = "complete"
 
-                    self._emit_progress(job_index, 100.0, "Complete", 0.0, "00:00")
+                        # Optionally rename if configured
+                        if self.naming_params.get("rename_files", True):
+                            self._rename_output(job)
 
-                    # Include size comparison in completion message
-                    size_msg = f"Encoding successful. Size: {original_size/(1024**2):.1f}MB → {new_size/(1024**2):.1f}MB ({size_diff_pct:+.1f}%)"
-                    self._emit_job_complete(job_index, True, size_msg)
+                        self._emit_progress(job_index, 100.0, "Complete", 0.0, "00:00")
+
+                        # Include size comparison in completion message
+                        size_msg = f"Encoding successful. Size: {original_size/(1024**2):.1f}MB → {new_size/(1024**2):.1f}MB ({size_diff_pct:+.1f}%)"
+                        self._emit_job_complete(job_index, True, size_msg)
                 else:
                     job.status = "failed"
                     job.error_message = "Output file is empty or missing"
@@ -926,5 +987,4 @@ class EncodingThread(QThread):
 
     def run(self):
         """Run the encoding process."""
-        self.encoder.start_encoding()
         self.encoder.start_encoding()

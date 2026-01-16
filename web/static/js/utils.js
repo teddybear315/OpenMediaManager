@@ -133,6 +133,12 @@ const API = {
         return response.json();
     },
 
+    async cleanupEncoded() {
+        const response = await fetch('/api/encode/cleanup', { method: 'POST' });
+        if (!response.ok) throw new Error('Failed to cleanup encoded files');
+        return response.json();
+    },
+
     async getEncodingStatus() {
         const response = await fetch('/api/encode/status');
         if (!response.ok) throw new Error('Failed to fetch encoding status');

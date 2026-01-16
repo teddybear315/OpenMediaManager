@@ -127,6 +127,17 @@ body {
     padding: 1.25rem;
     box-shadow: var(--shadow-light);
     flex: 1 1 60%;
+    transition: all 0.3s ease;
+    max-height: none;
+}
+
+.media-section.collapsed {
+    flex: 0 1 60%;
+    max-height: min-content;
+}
+
+.media-section.collapsed .media-table-wrapper {
+    display: none;
 }
 
 .log-section {
@@ -135,14 +146,16 @@ body {
     border-radius: 8px;
     padding: 1.25rem;
     box-shadow: var(--shadow-light);
-    flex: 1 1 40%;
+    flex: 1 1 auto;
     display: flex;
     flex-direction: column;
     transition: all 0.3s ease;
+    max-height: none;
 }
 
 .log-section.collapsed {
     flex: 0 1 40%;
+    max-height: min-content;
 }
 
 .section-header {
@@ -165,6 +178,60 @@ body {
     display: flex;
     gap: 0.5rem;
     flex-wrap: wrap;
+}
+
+.section-actions.hidden {
+    display: none;
+}
+
+#fileProgressContainer,
+#batchProgressContainer,
+#statisticsContainer {
+    display: none;
+}
+
+#fileProgressContainer.active,
+#batchProgressContainer.active,
+#statisticsContainer.active {
+    display: block;
+}
+
+#fileProgressLabel,
+#batchProgressLabel {
+    font-size: 0.9rem;
+    color: var(--text-color);
+}
+
+#fileProgressBar,
+#batchProgressBar {
+    height: 20px;
+    background-color: #333;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+#fileProgressFill {
+    width: 0%;
+    height: 100%;
+    background: linear-gradient(90deg, #4a9eff, #2a7fff);
+    transition: width 0.3s ease;
+}
+
+#batchProgressFill {
+    width: 0%;
+    height: 100%;
+    background: linear-gradient(90deg, #51cf66, #2a8f3f);
+    transition: width 0.3s ease;
+}
+
+#statisticsLabel {
+    font-size: 0.85rem;
+    color: #aaa;
+    font-family: monospace;
+}
+
+#stopEncodingBtn {
+    display: none;
 }
 
 /* ==========================================================================
@@ -275,10 +342,6 @@ body {
     cursor: pointer;
 }
 
-.media-table tr.group-header.collapsed .expand-toggle {
-    /* No rotation needed - character changes instead */
-}
-
 .media-table tr.group-header.hidden {
     display: none;
 }
@@ -383,7 +446,8 @@ body {
 }
 
 .encoding-log.visible {
-    max-height: 23.7vw;
+    height: 600px;
+    max-height: 600px;
     overflow-y: auto;
     overflow-x: hidden;
     opacity: 1;
@@ -412,7 +476,25 @@ body {
     gap: 0.5rem;
 }
 
+.media-section .section-header h2 {
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
 .log-section .log-toggle {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    line-height: 20px;
+    text-align: center;
+    font-size: 12px;
+    transition: transform 0.2s ease;
+}
+
+.media-section .media-toggle {
     display: inline-block;
     width: 20px;
     height: 20px;
@@ -425,7 +507,9 @@ body {
 .log-section.collapsed .log-toggle {
     transform: rotate(-90deg);
 }
-    padding: 0.25rem 0;
+
+.media-section.collapsed .media-toggle {
+    transform: rotate(-90deg);
 }
 
 .log-entry.info {
@@ -467,7 +551,6 @@ body {
 
 #batchProgressFill {
     background: linear-gradient(90deg, #51cf66, #2a8f3f);
-}
 }
 
 /* ==========================================================================
@@ -554,6 +637,7 @@ input[type="checkbox"] {
     align-items: center;
     justify-content: center;
     white-space: nowrap;
+    word-wrap: normal;
     gap: 0.5rem;
 }
 
@@ -677,6 +761,316 @@ input[type="checkbox"] {
 
 .modal-close:hover {
     color: var(--secondary-color);
+}
+
+/* Settings Dialog */
+#settingsDialog .modal-content {
+    max-width: 800px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+#settingsDialog .modal-body {
+    padding: 0;
+}
+
+#settingsDialog .modal-body > div {
+    display: flex;
+    border-bottom: 1px solid var(--border-color);
+}
+
+#settingsDialog .settings-tab {
+    flex: 1;
+    padding: 1rem;
+    border: none;
+    background: none;
+    cursor: pointer;
+    text-align: left;
+    color: var(--text-color);
+    border-bottom: 2px solid transparent;
+    transition: border-color 0.2s ease;
+}
+
+#settingsDialog .settings-tab.active {
+    border-bottom: 2px solid var(--primary-color);
+}
+
+#settingsForm {
+    padding: 1.5rem;
+}
+
+#mediaPath,
+#scanThreads,
+#audioLangs,
+#subtitleLangs,
+#minLowRes,
+#maxLowRes,
+#min720p,
+#max720p,
+#min1080p,
+#max1080p,
+#min1440p,
+#max1440p,
+#min4k,
+#max4k {
+    width: 100%;
+    padding: 0.5rem;
+}
+
+#settingsDialog label[for] {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+}
+
+#settingsDialog fieldset {
+    border: 1px solid var(--border-color);
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+    border-radius: 4px;
+}
+
+#settingsDialog fieldset legend {
+    padding: 0 0.5rem;
+}
+
+#settingsDialog fieldset > div {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+
+#settingsDialog .form-group {
+    margin-bottom: 1.5rem;
+}
+
+#settingsDialog .form-group:last-child {
+    margin-bottom: 0;
+}
+
+#settingsDialog h4 {
+    margin: 1.5rem 0 1rem 0;
+}
+
+#quality-tab > h4:first-of-type {
+    margin: 0 0 0.5rem 0;
+}
+
+#settingsDialog hr {
+    border: none;
+    border-top: 1px solid var(--border-color);
+    margin: 2rem 0;
+}
+
+#settingsDialog p {
+    font-size: 0.9rem;
+    color: #999;
+    margin-bottom: 1.5rem;
+}
+
+/* Encoding Settings Dialog */
+#encodingSettingsDialog .modal-content {
+    max-width: 1000px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+#encodingSettingsDialog .modal-body {
+    padding: 1.5rem;
+}
+
+#encodingSettingsDialog .modal-body > div {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+}
+
+#encodingSettingsDialog h3 {
+    margin-top: 1.5rem;
+}
+
+#encodingSettingsDialog h3:first-child {
+    margin-top: 0;
+}
+
+#encodingSettingsDialog .form-group {
+    margin-bottom: 1rem;
+}
+
+#encodingSettingsDialog label {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+    font-size: 0.9rem;
+}
+
+/* Encoding profile buttons */
+#encSaveProfile {
+    background: #4CAF50;
+    color: var(--text-color);
+    padding: 0.5rem 1rem;
+}
+
+#encDeleteProfile {
+    background: #f44336;
+    color: var(--text-color);
+    padding: 0.5rem 1rem;
+}
+
+/* Encoding form inputs and selects */
+#encProfile,
+#encCodec,
+#encPreset,
+#encLevel,
+#encBitDepth,
+#encCQ,
+#encThreads,
+#encAudioLangs,
+#encSubLangs,
+#encMinLowRes,
+#encMaxLowRes,
+#encTargetLowRes,
+#encMin720p,
+#encMax720p,
+#encTarget720p,
+#encMin1080p,
+#encMax1080p,
+#encTarget1080p,
+#encMin1440p,
+#encMax1440p,
+#encTarget1440p,
+#encMin4k,
+#encMax4k,
+#encTarget4k {
+    width: 100%;
+    padding: 0.5rem;
+}
+
+#encAudioLangsGroup,
+#encSubsLangsGroup,
+#lowResBitrateGroup,
+#res720pBitrateGroup,
+#res1080pBitrateGroup,
+#res1440pBitrateGroup,
+#res4kBitrateGroup,
+#encTargetLowResGroup,
+#encTarget720pGroup,
+#encTarget1080pGroup,
+#encTarget1440pGroup,
+#encTarget4kGroup,
+#quality-tab {
+    display: none;
+}
+
+#bitrateSettingsContainer {
+    background-color: var(--secondary-color);
+    padding: 1rem;
+    border-radius: 4px;
+}
+
+/* Profile select flex layout */
+#encodingSettingsDialog .form-group > div {
+    display: flex;
+    gap: 0.5rem;
+}
+
+#encodingSettingsDialog .form-group > div select {
+    flex: 1;
+    padding: 0.5rem;
+}
+
+/* Post-Encode Cleanup Section */
+#encodingSettingsDialog > .modal-body > div > div:last-child > div {
+    background-color: var(--bg-secondary);
+    padding: 1rem;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    margin-top: 1.5rem;
+}
+
+/* Cleanup checkboxes with flex labels */
+#encodingSettingsDialog #encAutoRemoveBroken,
+#encodingSettingsDialog #encAutoMoveSmaller {
+    display: block;
+}
+
+#encodingSettingsDialog #encAutoRemoveBroken + span,
+#encodingSettingsDialog #encAutoMoveSmaller + span {
+    display: block;
+}
+
+/* Cleanup section labels with flex alignment */
+#encodingSettingsDialog > .modal-body > div > div:last-child label {
+    display: flex;
+    align-items: flex-start;
+    cursor: pointer;
+}
+
+#encodingSettingsDialog > .modal-body > div > div:last-child input[type="checkbox"] {
+    margin-right: 0.5rem;
+    margin-top: 0.2rem;
+}
+
+#encodingSettingsDialog > .modal-body > div > div:last-child label strong {
+    display: block;
+    margin-bottom: 0.25rem;
+}
+
+#encodingSettingsDialog > .modal-body > div > div:last-child label small {
+    color: var(--text-secondary);
+}
+
+/* Encoding Stopped Modal */
+#encodingStoppedModal {
+    display: none;
+}
+
+#encodingStoppedModal.show {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#stoppedStatsDiv {
+    margin: 1rem 0;
+}
+
+#partialFilesSection {
+    display: none;
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background-color: var(--bg-warning);
+    border-radius: 4px;
+}
+
+#partialFilesSection.show {
+    display: block;
+}
+
+#deletePartialBtn {
+    display: none;
+}
+
+#deletePartialBtn.show {
+    display: inline-block;
+}
+
+/* Progress Label Containers */
+.progress-label-container {
+    margin-bottom: 0.5rem;
+}
+
+/* Statistics Header */
+.statistics-header {
+    margin: 0 0 0.5rem 0;
+    color: var(--text-color);
+}
+
+/* Profile Button Group */
+.profile-button-group {
+    display: flex;
+    gap: 0.5rem;
 }
 
 .modal-body {
@@ -852,7 +1246,7 @@ input[type="checkbox"] {
         padding: 0.75rem;
         border-radius: 6px;
         flex: 1 1 auto;
-        min-height: 200px;
+        min-height: 100px;
         overflow-y: auto;
         -webkit-overflow-scrolling: touch;
         display: flex;
@@ -931,7 +1325,7 @@ input[type="checkbox"] {
     /* Encoding log display on mobile */
     .encoding-log {
         flex: 1;
-        min-height: 0;
+        min-height: 400px;
     }
 
     .encoding-log.visible {
@@ -950,15 +1344,19 @@ input[type="checkbox"] {
     #batchProgressContainer {
         display: none;
         flex-shrink: 0;
-        padding: 0.5rem !important;
-        margin: 0 !important;
+        padding: 1rem;
+        margin: 0;
+        background-color: var(--bg-secondary);
+        border-bottom: 1px solid var(--border-color);
     }
 
     #statisticsContainer {
         display: none;
         flex-shrink: 0;
-        padding: 0.5rem !important;
-        margin: 0 !important;
+        padding: 1rem;
+        margin: 0;
+        background-color: var(--bg-secondary);
+        border-bottom: 1px solid var(--border-color);
         max-height: 70px;
         overflow-y: auto;
     }
@@ -1003,6 +1401,8 @@ input[type="checkbox"] {
     .btn {
         padding: 0.7rem 1rem;
         font-size: 0.95rem;
+        white-space: normal;
+        /* word-break: break-word; */
     }
 }
 
@@ -1065,6 +1465,48 @@ input[type="checkbox"] {
 
 .scrollable {
     overflow-y: auto;
+}
+
+/* Post-encode dialog styles */
+.modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.7);
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal-dialog {
+    background-color: var(--bg-secondary);
+    border-radius: 8px;
+    width: 90%;
+    max-width: 700px;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: var(--shadow-medium);
+}
+
+.bg-warning {
+    background-color: rgba(255, 165, 0, 0.1);
+    border: 1px solid rgba(255, 165, 0, 0.3);
+}
+
+/* Disabled field states */
+input:disabled,
+select:disabled,
+textarea:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Hidden group containers */
+.form-group-hidden {
+    display: none;
 }
 
 /* Print styles */
