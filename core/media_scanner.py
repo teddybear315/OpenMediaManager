@@ -5,6 +5,7 @@ Scans directories for media files and analyzes their properties using ffprobe.
 
 import hashlib
 import json
+import logging
 import os
 import pickle
 import re
@@ -18,6 +19,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Pattern
 
 from .constants import MEDIA_EXTENSIONS
+from .utils import get_resolution_category
+
+logger = logging.getLogger(__name__)
 
 
 class MediaStatus(Enum):
@@ -289,9 +293,9 @@ class MediaScanner:
             if self.cache_file.exists():
                 with open(self.cache_file, 'rb') as f:
                     self.analysis_cache = pickle.load(f)
-                print(f"[CACHE] Loaded {len(self.analysis_cache)} cached entries")
+                logger.info(f"Loaded {len(self.analysis_cache)} cached entries")
         except Exception as e:
-            print(f"[CACHE] Failed to load cache: {e}")
+            logger.error(f"Failed to load cache: {e}")
             self.analysis_cache = {}
 
     def _save_cache(self):
@@ -300,7 +304,7 @@ class MediaScanner:
             with open(self.cache_file, 'wb') as f:
                 pickle.dump(self.analysis_cache, f)
         except Exception as e:
-            print(f"[CACHE] Failed to save cache: {e}")
+            logger.error(f"Failed to save cache: {e}")
 
     def scan_directory(self, directory: Path, recursive: bool = True) -> List[MediaInfo]:
         """
@@ -314,7 +318,7 @@ class MediaScanner:
             List of MediaInfo objects for found media files.
         """
         start_time = time.time()
-        print(f"\n[TIMING] Starting directory scan: {directory}")
+        logger.debug(f"Starting directory scan: {directory}")
 
         media_files = []
 
@@ -361,7 +365,7 @@ class MediaScanner:
                 print(f"Warning: Error scanning directory {directory}: {e}")
 
         walk_time = time.time() - walk_start
-        print(f"[TIMING] Directory walk completed in {walk_time:.2f}s - found {len(media_files)} files")
+        logger.debug(f"Directory walk completed in {walk_time:.2f}s - found {len(media_files)} files")
 
         # Create MediaInfo objects
         info_start = time.time()
@@ -500,11 +504,11 @@ class MediaScanner:
 
         info_time = time.time() - info_start
         total_time = time.time() - start_time
-        print(f"[TIMING] MediaInfo creation completed in {info_time:.2f}s (parent count: {parent_count_time:.2f}s)")
-        print(f"[CACHE] Cache hits: {cache_hits}/{len(media_files)} ({cache_hits*100//len(media_files) if media_files else 0}%)")
+        logger.debug(f"MediaInfo creation completed in {info_time:.2f}s (parent count: {parent_count_time:.2f}s)")
+        logger.info(f"Cache hits: {cache_hits}/{len(media_files)} ({cache_hits*100//len(media_files) if media_files else 0}%)")
         if filtered_small > 0:
-            print(f"[FILTER] Filtered {filtered_small} small files (< 1MB)")
-        print(f"[TIMING] Total scan_directory time: {total_time:.2f}s\n")
+            logger.debug(f"Filtered {filtered_small} small files (< 1MB)")
+        logger.info(f"Scan complete: {len(results)} files in {total_time:.2f}s")
 
         # Store results in instance variable for web API access
         self.media_files = {str(file.path): file for file in results}
@@ -530,7 +534,7 @@ class MediaScanner:
         with media_info._analysis_lock:
             # Double-check after acquiring lock
             if media_info._analyzing:
-                print(f"[WARNING] Skipping duplicate analysis of {media_info.filename}")
+                logger.warning(f"Skipping duplicate analysis of {media_info.filename}")
                 return media_info
 
             if media_info.status != MediaStatus.UNKNOWN and media_info.status != MediaStatus.SCANNING:
@@ -689,13 +693,13 @@ class MediaScanner:
 
             # Log timing for files that take longer than 1 second
             if total_time > 1.0:
-                print(f"[TIMING] Slow file analysis ({total_time:.2f}s): {media_info.filename}")
-                print(f"  - ffprobe: {probe_time:.2f}s, parse: {parse_time:.3f}s, extract: {extract_time:.3f}s, compliance: {compliance_time:.3f}s")
+                logger.debug(f"Slow file analysis ({total_time:.2f}s): {media_info.filename}")
+                logger.debug(f"  - ffprobe: {probe_time:.2f}s, parse: {parse_time:.3f}s, extract: {extract_time:.3f}s, compliance: {compliance_time:.3f}s")
 
         except subprocess.TimeoutExpired:
             media_info.status = MediaStatus.ERROR
             media_info.issues.append("Timeout while probing media")
-            print(f"[TIMING] TIMEOUT after 10s: {media_info.filename}")
+            logger.warning(f"TIMEOUT after 10s: {media_info.filename}")
         except json.JSONDecodeError:
             media_info.status = MediaStatus.ERROR
             media_info.issues.append("Invalid ffprobe output")
@@ -763,10 +767,10 @@ class MediaScanner:
         total = len(to_analyze)
 
         if total == 0:
-            print("[BATCH] All files already analyzed from cache")
+            logger.debug("All files already analyzed from cache")
             return media_list
 
-        print(f"[BATCH] Starting parallel analysis of {total} files with {max_workers} workers")
+        logger.info(f"Starting parallel analysis of {total} files with {max_workers} workers")
         start_time = time.time()
         completed = 0
 
@@ -785,10 +789,10 @@ class MediaScanner:
                     elapsed = time.time() - start_time
                     rate = completed / elapsed if elapsed > 0 else 0
                     remaining = (total - completed) / rate if rate > 0 else 0
-                    print(f"[BATCH] Progress: {completed}/{total} ({rate:.1f} files/sec, ~{remaining:.0f}s remaining)")
+                    logger.info(f"Progress: {completed}/{total} ({rate:.1f} files/sec, ~{remaining:.0f}s remaining)")
 
         elapsed = time.time() - start_time
-        print(f"[BATCH] Completed {total} files in {elapsed:.1f}s ({total/elapsed:.1f} files/sec)")
+        logger.info(f"Completed {total} files in {elapsed:.1f}s ({total/elapsed:.1f} files/sec)")
 
         # Save cache after batch analysis
         self._save_cache()
@@ -808,53 +812,12 @@ class MediaScanner:
         issues = []
         warnings = []
 
-        # Determine resolution category based primarily on WIDTH
-        # Width stays consistent across aspect ratios (1920 = 1080p, 1280 = 720p, etc.)
-        # Height varies with letterboxing/cropping (1920x800, 1920x1080, 1920x1440 are all "1080p-class")
-        height = media_info.height
-        width = media_info.width
-
-        # Width-first detection (handles all landscape/standard content)
-        if width >= 3840:
-            res_category = "4k"
-            min_bitrate = self.quality_standards.get("min_bitrate_4k", 6000)
-            max_bitrate = self.quality_standards.get("max_bitrate_4k", 10000)
-        elif width >= 2560:
-            res_category = "1440p"
-            min_bitrate = self.quality_standards.get("min_bitrate_1440p", 3000)
-            max_bitrate = self.quality_standards.get("max_bitrate_1440p", 6000)
-        elif width >= 1900:
-            # 1080p class: 1920-wide content regardless of height (768, 800, 1080, 1440, etc.)
-            res_category = "1080p"
-            min_bitrate = self.quality_standards.get("min_bitrate_1080p", 1500)
-            max_bitrate = self.quality_standards.get("max_bitrate_1080p", 4000)
-        elif width >= 1200:
-            # 720p class: 1280-wide content regardless of height
-            res_category = "720p"
-            min_bitrate = self.quality_standards.get("min_bitrate_720p", 1000)
-            max_bitrate = self.quality_standards.get("max_bitrate_720p", 2000)
-        # Height fallback for portrait/narrow content only
-        elif height >= 2160:
-            res_category = "4k"
-            min_bitrate = self.quality_standards.get("min_bitrate_4k", 6000)
-            max_bitrate = self.quality_standards.get("max_bitrate_4k", 10000)
-        elif height >= 1440:
-            res_category = "1440p"
-            min_bitrate = self.quality_standards.get("min_bitrate_1440p", 3000)
-            max_bitrate = self.quality_standards.get("max_bitrate_1440p", 6000)
-        elif height >= 1080:
-            res_category = "1080p"
-            min_bitrate = self.quality_standards.get("min_bitrate_1080p", 1500)
-            max_bitrate = self.quality_standards.get("max_bitrate_1080p", 4000)
-        elif height >= 720:
-            res_category = "720p"
-            min_bitrate = self.quality_standards.get("min_bitrate_720p", 1000)
-            max_bitrate = self.quality_standards.get("max_bitrate_720p", 2000)
-        else:
-            # Below 720p - use low_res bitrate settings
-            res_category = "low_res"
-            min_bitrate = self.quality_standards.get("min_bitrate_low_res", 500)
-            max_bitrate = self.quality_standards.get("max_bitrate_low_res", 1000)
+        # Determine resolution category and bitrate ranges using utility function
+        res_category, min_bitrate, max_bitrate = get_resolution_category(
+            media_info.width,
+            media_info.height,
+            self.quality_standards
+        )
 
         # Check codec
         preferred_codec = self.quality_standards.get("preferred_codec", "hevc")

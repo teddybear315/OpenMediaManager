@@ -6,6 +6,7 @@ FastAPI-based web interface for remote library management.
 
 import asyncio
 import json
+import logging
 import queue
 import subprocess
 import threading
@@ -28,6 +29,8 @@ from core.batch_encoder import BatchEncoder, EncodingJob
 from core.config_manager import ConfigManager
 from core.media_scanner import (MediaCategory, MediaInfo, MediaScanner,
                                 MediaStatus)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -142,7 +145,7 @@ class ConnectionManager:
                 except queue.Empty:
                     await asyncio.sleep(0.01)
             except Exception as e:
-                print(f"Error processing broadcast queue: {e}")
+                logger.error(f"Error processing broadcast queue: {e}", exc_info=True)
 
 
 # Global instances
@@ -543,7 +546,7 @@ async def start_encoding(request: Request):
     try:
         request_body = await request.json()
     except Exception as e:
-        print(f"[ERROR] Failed to parse request JSON: {e}")
+        logger.error(f"Failed to parse request JSON: {e}")
         raise HTTPException(status_code=400, detail=f"Invalid JSON request: {str(e)}")
 
     # Get files and settings from request body
@@ -671,7 +674,7 @@ async def run_encoding_async():
                             # Remove expanded/broken encoded file
                             encoded_path.unlink()
                             cleanup_results["removed_expanded"] += 1
-                            print(f"[CLEANUP] Removed expanded file: {encoded_path.name} ({encoded_size:,} >= {original_size:,} bytes)")
+                            logger.info(f"Removed expanded file: {encoded_path.name} ({encoded_size:,} >= {original_size:,} bytes)")
                         else:
                             cleanup_results["skipped"] += 1
                     elif cleanup_settings.get("auto_move_smaller"):
@@ -685,12 +688,12 @@ async def run_encoding_async():
                         encoded_path.rename(final_path)
 
                         cleanup_results["moved_files"] += 1
-                        print(f"[CLEANUP] Replaced {original_path.name} with {encoded_path.name} (saved {original_size - encoded_size:,} bytes)")
+                        logger.info(f"Replaced {original_path.name} with {encoded_path.name} (saved {original_size - encoded_size:,} bytes)")
 
                 except Exception as e:
                     error_msg = f"{job.media_info.filename}: {str(e)}"
                     cleanup_results["errors"].append(error_msg)
-                    print(f"[ERROR] Auto-cleanup failed for {job.media_info.filename}: {e}")
+                    logger.error(f"Auto-cleanup failed for {job.media_info.filename}: {e}", exc_info=True)
 
         # Collect job details for frontend
         jobs_data = []
@@ -780,7 +783,7 @@ async def cleanup_encoding():
                     # Encoding made file larger - keep original, delete encoded
                     encoded_path.unlink()
                     skipped_count += 1
-                    print(f"[CLEANUP] Kept original {original_path.name} (encoded was larger: {encoded_size:,} vs {original_size:,} bytes)")
+                    logger.info(f"Kept original {original_path.name} (encoded was larger: {encoded_size:,} vs {original_size:,} bytes)")
                     continue
 
             # Determine final path (same location as original, with encoded name)
@@ -794,13 +797,13 @@ async def cleanup_encoding():
             encoded_path.rename(final_path)
 
             successful_count += 1
-            print(f"[CLEANUP] Replaced {original_path.name} with {encoded_path.name}")
+            logger.info(f"Replaced {original_path.name} with {encoded_path.name}")
 
         except Exception as e:
             failed_count += 1
             error_msg = f"{job.media_info.filename}: {str(e)}"
             errors.append(error_msg)
-            print(f"[ERROR] Cleanup failed for {job.media_info.filename}: {e}")
+            logger.error(f"Cleanup failed for {job.media_info.filename}: {e}", exc_info=True)
 
     return {
         "status": "success" if failed_count == 0 else "partial",
@@ -826,11 +829,11 @@ async def cleanup_partial_files():
             try:
                 job.output_path.unlink()
                 deleted_count += 1
-                print(f"[CLEANUP] Deleted partial file: {job.output_path}")
+                logger.info(f"Deleted partial file: {job.output_path}")
             except Exception as e:
                 failed_count += 1
                 errors.append(f"{job.output_path.name}: {str(e)}")
-                print(f"[ERROR] Failed to delete {job.output_path}: {e}")
+                logger.error(f"Failed to delete {job.output_path}: {e}")
 
     return {
         "status": "success" if failed_count == 0 else "partial",

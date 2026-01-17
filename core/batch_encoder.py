@@ -3,6 +3,7 @@ Batch Encoder for Open Media Manager
 Handles re-encoding of media files using ffmpeg.
 """
 
+import logging
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -13,6 +14,9 @@ from typing import Any, Callable, Dict, List, Optional
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from .media_scanner import MediaInfo, MediaStatus
+from .utils import calculate_size_reduction, format_file_size, get_resolution_category
+
+logger = logging.getLogger(__name__)
 
 
 class EncodingMode(Enum):
@@ -108,7 +112,7 @@ class BatchEncoder(QObject):
         for part in filepath.parts:
             for char in invalid_chars:
                 if char in part:
-                    print(f"[VALIDATION] Invalid character '{char}' (U+{ord(char):04X}) found in path part: {part}")
+                    logger.warning(f"Invalid character '{char}' (U+{ord(char):04X}) found in path part: {part}")
                     return False
 
         return True
@@ -155,7 +159,7 @@ class BatchEncoder(QObject):
 
         for idx, job in enumerate(self.jobs):
             if self.should_stop:
-                print(f"[STOP] Stopping batch encoding at job {idx}")
+                logger.info(f"Stopping batch encoding at job {idx}")
                 break
 
             self._encode_job(idx, job)
@@ -169,52 +173,57 @@ class BatchEncoder(QObject):
 
     def stop_encoding(self):
         """Stop the batch encoding process completely."""
-        print("[STOP] Stop encoding requested")
+        logger.info("Stop encoding requested")
         self.should_stop = True
         self.is_running = False
 
         # Immediately kill the current ffmpeg process if running
         if self.current_process and self.current_process.poll() is None:
+            import os
+            import signal
+            
             try:
                 pid = self.current_process.pid
-                print(f"[STOP] Killing ffmpeg process (PID: {pid}) and its tree")
-                import os
+                logger.info(f"Killing ffmpeg process (PID: {pid}) and its tree")
+                
                 if os.name == 'nt':
                     # Use taskkill to remove the whole process tree on Windows
-                    subprocess.run(['taskkill', '/PID', str(pid), '/T', '/F'], check=False)
-                    print("[STOP] taskkill invoked for PID", pid)
+                    subprocess.run(['taskkill', '/PID', str(pid), '/T', '/F'], 
+                                 check=False, timeout=5)
+                    logger.debug(f"taskkill invoked for PID {pid}")
                 else:
                     # POSIX: kill the process group
                     try:
                         pgid = os.getpgid(pid)
-                        os.killpg(pgid, 9)
-                        print("[STOP] Killed process group", pgid)
-                    except Exception:
+                        os.killpg(pgid, signal.SIGKILL)
+                        logger.debug(f"Killed process group {pgid}")
+                    except (ProcessLookupError, PermissionError) as e:
                         # Fallback to killing the single process
+                        logger.debug(f"Could not kill process group, killing single process: {e}")
                         try:
                             self.current_process.kill()
-                        except Exception:
-                            pass
-                print("[STOP] FFmpeg kill sequence complete")
-            except subprocess.TimeoutExpired:
-                print(f"[STOP] Process {self.current_process.pid} did not die, forcing")
-                import os
-                import signal
+                        except ProcessLookupError:
+                            logger.debug("Process already terminated")
+                
+                # Wait for process to actually die
                 try:
+                    self.current_process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"Process {pid} did not terminate gracefully, forcing")
                     if os.name == 'nt':
-                        # Use taskkill to remove process tree on Windows
-                        subprocess.run(['taskkill', '/PID', str(self.current_process.pid), '/T', '/F'], check=False)
+                        subprocess.run(['taskkill', '/PID', str(pid), '/T', '/F'], 
+                                     check=False, timeout=5)
                     else:
-                        os.kill(self.current_process.pid, signal.SIGKILL)
-                except Exception:
-                    pass
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                
+                logger.info("FFmpeg kill sequence complete")
             except Exception as e:
-                print(f"[WARNING] Could not kill ffmpeg process: {e}")
+                logger.error(f"Could not kill ffmpeg process: {e}", exc_info=True)
             finally:
-                try:
-                    self.current_process = None
-                except Exception:
-                    pass
+                self.current_process = None
 
     def stop(self):
         """Compatibility alias for GUI: call `stop_encoding()`.
@@ -320,7 +329,7 @@ class BatchEncoder(QObject):
         """
         # Check if stop was requested before starting this job
         if self.should_stop:
-            print(f"[STOP] Skipping job {job_index} - stop requested")
+            logger.info(f"Skipping job {job_index} - stop requested")
             job.status = "cancelled"
             return
 
@@ -354,7 +363,7 @@ class BatchEncoder(QObject):
 
             # Log the command
             cmd_str = ' '.join(cmd)
-            print(f"[ENCODE CMD] {cmd_str}")
+            logger.debug(f"Encoding command: {cmd_str}")
             self._emit_log("command", cmd_str, "")
 
             # Create output directory if needed
@@ -405,7 +414,7 @@ class BatchEncoder(QObject):
                         try:
                             process.wait(timeout=2)
                         except subprocess.TimeoutExpired:
-                            print("[WARNING] Process did not terminate, forcing kill")
+                            logger.warning("Process did not terminate, forcing kill")
                             process.kill()
                             process.wait()
 
@@ -413,9 +422,9 @@ class BatchEncoder(QObject):
                         try:
                             if job.output_path.exists():
                                 job.output_path.unlink()
-                                print(f"[INFO] Deleted partial file: {job.output_path}")
+                                logger.info(f"Deleted partial file: {job.output_path}")
                         except Exception as e:
-                            print(f"[WARNING] Could not delete partial file {job.output_path}: {e}")
+                            logger.warning(f"Could not delete partial file {job.output_path}: {e}")
 
                         job.status = "cancelled"
                         self._emit_job_complete(job_index, False, "Cancelled by user")
@@ -492,7 +501,7 @@ class BatchEncoder(QObject):
                             self._emit_progress(job_index, progress, "Encoding...", encoding_fps, eta)
                         except Exception as e:
                             # Log parsing errors for debugging
-                            print(f"[DEBUG] Progress parsing error: {e}")
+                            logger.debug(f"Progress parsing error: {e}")
                             pass
 
             finally:
@@ -524,7 +533,7 @@ class BatchEncoder(QObject):
                         try:
                             if job.output_path.exists():
                                 job.output_path.unlink()
-                                print(f"[INFO] Deleted partial file after stop: {job.output_path}")
+                                logger.info(f"Deleted partial file after stop: {job.output_path}")
                                 deleted = True
                                 break
                             else:
@@ -534,9 +543,9 @@ class BatchEncoder(QObject):
                             last_exc = e
                             time.sleep(0.5)
                     if not deleted:
-                        print(f"[WARNING] Could not delete partial file {job.output_path}: {last_exc}")
+                        logger.warning(f"Could not delete partial file {job.output_path}: {last_exc}")
                 except Exception as e:
-                    print(f"[WARNING] Error while deleting partial file: {e}")
+                    logger.warning(f"Error while deleting partial file: {e}")
 
                 job.status = "cancelled"
                 self._emit_job_complete(job_index, False, "Cancelled by user")
@@ -566,6 +575,31 @@ class BatchEncoder(QObject):
                             self._rename_output(job)
 
                         self._emit_progress(job_index, 100.0, "Complete", 0.0, "00:00")
+
+                        # Emit completion log messages matching the GUI format
+                        source_path = str(job.media_info.path)
+                        self._emit_log("info", f"✓ COMPLETE: {source_path}", "#4caf50")
+
+                        # Format sizes for display using utility function
+                        orig_size_str, orig_unit = format_file_size(original_size)
+                        enc_size_str, enc_unit = format_file_size(new_size)
+
+                        # Calculate reduction and choose color
+                        if size_diff_pct > 0:
+                            color = "#4caf50"  # Green for reduction
+                            sign = "-"
+                            reduction = size_diff_pct
+                        elif size_diff_pct < 0:
+                            color = "#ff9800"  # Orange for growth
+                            sign = "+"
+                            reduction = abs(size_diff_pct)
+                        else:
+                            color = "#888888"  # Gray for no change
+                            sign = ""
+                            reduction = 0.0
+
+                        size_log = f"File Size - Original: {orig_size_str:.2f} {orig_unit}, Encoded: {enc_size_str:.2f} {enc_unit}, Change: {sign}{reduction:.2f}%"
+                        self._emit_log("reduction_info", size_log, color)
 
                         # Include size comparison in completion message
                         size_msg = f"Encoding successful. Size: {original_size/(1024**2):.1f}MB → {new_size/(1024**2):.1f}MB ({size_diff_pct:+.1f}%)"
@@ -699,51 +733,16 @@ class BatchEncoder(QObject):
                 cmd.insert(1, '-hwaccel')
 
         if use_target_bitrate or use_bitrate_limits:
-            # Determine resolution-specific bitrate
-            # Prioritize WIDTH first - only use height as fallback for portrait content
-            height = media_info.height
-            width = media_info.width
-
-            # Width-first detection (handles all landscape/standard content)
-            if width >= 3840:
-                target_bitrate = self.encoding_params.get("target_bitrate_4k", 8000)
-                bitrate_min = self.encoding_params.get("encoding_bitrate_min_4k", 6000)
-                bitrate_max = self.encoding_params.get("encoding_bitrate_max_4k", 10000)
-            elif width >= 2560:
-                target_bitrate = self.encoding_params.get("target_bitrate_1440p", 5000)
-                bitrate_min = self.encoding_params.get("encoding_bitrate_min_1440p", 3000)
-                bitrate_max = self.encoding_params.get("encoding_bitrate_max_1440p", 6000)
-            elif width >= 1900:
-                # 1080p class: 1920-wide content regardless of height (768, 800, 1080, 1440, etc.)
-                target_bitrate = self.encoding_params.get("target_bitrate_1080p", 3000)
-                bitrate_min = self.encoding_params.get("encoding_bitrate_min_1080p", 1500)
-                bitrate_max = self.encoding_params.get("encoding_bitrate_max_1080p", 4000)
-            elif width >= 1200:
-                # 720p class: 1280-wide content regardless of height
-                target_bitrate = self.encoding_params.get("target_bitrate_720p", 1500)
-                bitrate_min = self.encoding_params.get("encoding_bitrate_min_720p", 1000)
-                bitrate_max = self.encoding_params.get("encoding_bitrate_max_720p", 2000)
-            # Height fallback for portrait/narrow content only
-            elif height >= 2160:
-                target_bitrate = self.encoding_params.get("target_bitrate_4k", 8000)
-                bitrate_min = self.encoding_params.get("encoding_bitrate_min_4k", 6000)
-                bitrate_max = self.encoding_params.get("encoding_bitrate_max_4k", 10000)
-            elif height >= 1440:
-                target_bitrate = self.encoding_params.get("target_bitrate_1440p", 5000)
-                bitrate_min = self.encoding_params.get("encoding_bitrate_min_1440p", 3000)
-                bitrate_max = self.encoding_params.get("encoding_bitrate_max_1440p", 6000)
-            elif height >= 1080:
-                target_bitrate = self.encoding_params.get("target_bitrate_1080p", 3000)
-                bitrate_min = self.encoding_params.get("encoding_bitrate_min_1080p", 1500)
-                bitrate_max = self.encoding_params.get("encoding_bitrate_max_1080p", 4000)
-            elif height >= 720:
-                target_bitrate = self.encoding_params.get("target_bitrate_720p", 1500)
-                bitrate_min = self.encoding_params.get("encoding_bitrate_min_720p", 1000)
-                bitrate_max = self.encoding_params.get("encoding_bitrate_max_720p", 2000)
-            else:  # Below 720p (low res)
-                target_bitrate = self.encoding_params.get("target_bitrate_low_res", 800)
-                bitrate_min = self.encoding_params.get("encoding_bitrate_min_low_res", 500)
-                bitrate_max = self.encoding_params.get("encoding_bitrate_max_low_res", 1000)
+            # Determine resolution-specific bitrate using centralized utility
+            res_category, target_bitrate, bitrate_max = get_resolution_category(
+                media_info.width, 
+                media_info.height, 
+                self.encoding_params
+            )
+            
+            # Get min bitrate from encoding params
+            bitrate_min_key = f"encoding_bitrate_min_{res_category}"
+            bitrate_min = self.encoding_params.get(bitrate_min_key, target_bitrate // 2)
 
             # Apply target bitrate if enabled (works with CQ mode)
             if use_target_bitrate:
@@ -950,11 +949,11 @@ class BatchEncoder(QObject):
                 shutil.rmtree(encoded_dir, ignore_errors=False)
                 folders_removed += 1
 
-                print(f"[CLEANUP] Removed: {encoded_dir} ({file_count} files)")
+                logger.info(f"Removed: {encoded_dir} ({file_count} files)")
             except Exception as e:
                 error_msg = f"Failed to remove {encoded_dir}: {str(e)}"
                 errors.append(error_msg)
-                print(f"[CLEANUP] Error: {error_msg}")
+                logger.error(error_msg)
 
         status = f"Cleanup complete: {folders_removed} folder(s) and {files_removed} file(s) removed"
         if errors:

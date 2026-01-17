@@ -6,6 +6,7 @@ for managing and re-encoding media files.
 """
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -14,6 +15,20 @@ from PyQt6.QtWidgets import QApplication
 
 from core.config_manager import ConfigManager
 from gui.gui_components import MainWindow, OOTBDialog
+
+# Configure logging
+log_dir = Path.home() / '.config' / 'openmediamanager'
+log_dir.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(log_dir / 'app.log')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 
 def run_gui():
@@ -65,15 +80,15 @@ def run_web_server(host: str = "127.0.0.1", port: int = 8000, reload: bool = Fal
     """Run the FastAPI web server."""
     try:
         from web.server import run_server
-        print(f"Starting Open Media Manager web server on {host}:{port}")
-        print(f"Open your browser to http://{host}:{port}/")
+        logger.info(f"Starting Open Media Manager web server on {host}:{port}")
+        logger.info(f"Open your browser to http://{host}:{port}/")
         run_server(host=host, port=port, reload=reload)
     except ImportError as e:
-        print(f"Error: Required server dependencies not installed")
-        print(f"Please install required packages: pip install -r requirements.txt")
+        logger.error("Required server dependencies not installed")
+        logger.error("Please install required packages: pip install -r requirements.txt")
         return 1
     except Exception as e:
-        print(f"Error starting web server: {e}")
+        logger.error(f"Error starting web server: {e}", exc_info=True)
         return 1
 
 

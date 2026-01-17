@@ -20,8 +20,6 @@ class OpenMediaManager {
     }
 
     async init() {
-        console.log('Initializing Open Media Manager web interface...');
-
         // Set up UI elements
         this.setupUI();
 
@@ -36,9 +34,6 @@ class OpenMediaManager {
 
         // Load initial data
         this.filteredFiles = await this.loadMedia();
-        console.log(this.filteredFiles);
-
-        console.log('Initialization complete');
     }
 
     setupUI() {
@@ -47,6 +42,10 @@ class OpenMediaManager {
         document.documentElement.setAttribute('data-theme', savedTheme);
         const themeBtn = document.getElementById('themeBtn');
         themeBtn.textContent = savedTheme === 'dark' ? '☀️' : '🌙';
+
+        // Clear statistics on page load
+        document.getElementById('statisticsLabel').innerHTML = 'No files processed yet';
+        document.getElementById('statisticsContainer').classList.remove('active');
 
         // Set up responsive layout observer
         window.addEventListener('resize', () => this.onWindowResize());
@@ -70,6 +69,7 @@ class OpenMediaManager {
         document.getElementById('selectAllCheckbox').addEventListener('change', (e) => this.toggleSelectAll(e));
         document.getElementById('selectAllBtn').addEventListener('click', () => this.selectAll());
         document.getElementById('encodeBtn').addEventListener('click', () => this.startEncoding());
+        document.getElementById('stopEncodingBtn').addEventListener('click', () => this.stopEncoding());
         document.getElementById('searchInput').addEventListener('input',
             Utils.debounce((e) => this.filterMedia(e.target.value), 300)
         );
@@ -87,7 +87,6 @@ class OpenMediaManager {
 
         // Log buttons
         document.getElementById('clearLogBtn').addEventListener('click', () => this.clearLog());
-        document.getElementById('stopEncodingBtn').addEventListener('click', () => this.stopEncoding());
 
         // Modal close buttons
         document.querySelectorAll('.modal-close').forEach(btn => {
@@ -133,6 +132,14 @@ class OpenMediaManager {
                     document.getElementById('encodeBtn').style.display = 'none';
                     document.getElementById('stopEncodingBtn').style.display = 'inline-block';
                     document.getElementById('stopEncodingBtn').disabled = false;
+                    // Clear old statistics for new encoding session
+                    this.encodingLogState = {
+                        totalFiles: data.job_count || 0,
+                        currentFile: 0,
+                        totalOriginalSize: 0,
+                        totalEncodedSize: 0,
+                        fileStats: []
+                    };
                     // Show progress containers on mobile
                     document.getElementById('fileProgressContainer').classList.add('active');
                     document.getElementById('batchProgressContainer').classList.add('active');
@@ -188,6 +195,10 @@ class OpenMediaManager {
                     document.getElementById('fileProgressContainer').classList.remove('active');
                     document.getElementById('batchProgressContainer').classList.remove('active');
                     document.getElementById('statisticsContainer').classList.remove('active');
+                    // Show the clear log button
+                    const logSection = document.getElementById('logSection');
+                    const actions = logSection.querySelector('.section-actions');
+                    if (actions) actions.classList.remove('hidden');
                     Utils.Logger.warning('Encoding stopped by user');
                     this.displayLog();
                     // Show stopped dialog if there are partial files
@@ -200,6 +211,8 @@ class OpenMediaManager {
                     this.handleFileComplete(data);
                 } else if (data.type === 'file_progress') {
                     this.updateFileProgress(data);
+                } else if (data.type === 'statistics_update') {
+                    this.updateStatistics(data.statistics);
                 } else if (data.type === 'scan_complete') {
                     // Utils.Logger.success(`Media scan complete: ${data.count} files found`);
                     this.displayLog();
@@ -317,20 +330,38 @@ class OpenMediaManager {
         document.getElementById('fileProgressLabel').textContent = text;
     }
 
-    updateStatistics() {
-        const stats = this.encodingLogState;
-        if (stats.fileStats.length === 0) return;
+    updateStatistics(serverStats = null) {
+        // Use server stats if provided, otherwise use encodingLogState
+        const stats = serverStats || this.encodingLogState;
+        if (!stats) return;
 
-        const numFiles = stats.fileStats.length;
-        const origSize = stats.totalOriginalSize / (1024 * 1024);
-        const encSize = stats.totalEncodedSize / (1024 * 1024);
+        // Sync server stats back to encodingLogState if provided
+        if (serverStats && !this.encodingLogState) {
+            this.encodingLogState = serverStats;
+        }
+
+        const fileStats = serverStats ? serverStats.file_statistics : stats.fileStats;
+
+        // If no files have been processed yet, show initial message
+        if (!fileStats || fileStats.length === 0) {
+            document.getElementById('statisticsLabel').innerHTML = 'No files processed yet';
+            document.getElementById('statisticsContainer').classList.add('active');
+            return;
+        }
+
+        const totalOriginal = serverStats ? serverStats.total_original_size : stats.totalOriginalSize;
+        const totalEncoded = serverStats ? serverStats.total_encoded_size : stats.totalEncodedSize;
+
+        const numFiles = fileStats.length;
+        const origSize = totalOriginal / (1024 * 1024);
+        const encSize = totalEncoded / (1024 * 1024);
         const origUnit = origSize > 974 ? 'GB' : 'MB';
         const encUnit = encSize > 974 ? 'GB' : 'MB';
         const origValue = origSize > 974 ? origSize / 1024 : origSize;
         const encValue = encSize > 974 ? encSize / 1024 : encSize;
 
-        const reduction = ((stats.totalOriginalSize - stats.totalEncodedSize) / stats.totalOriginalSize) * 100;
-        const avgReduction = stats.fileStats.reduce((a, b) => a + b.reduction, 0) / numFiles;
+        const reduction = ((totalOriginal - totalEncoded) / totalOriginal) * 100;
+        const avgReduction = fileStats.reduce((a, b) => a + (b.reduction_percent || 0), 0) / numFiles;
 
         const text = `<b>Files Processed:</b> ${numFiles} | ` +
             `<b>Total Original:</b> ${origValue.toFixed(2)} ${origUnit} | <b>Encoded:</b> ${encValue.toFixed(2)} ${encUnit}<br>` +
@@ -338,6 +369,7 @@ class OpenMediaManager {
             `<b>Average per File:</b> ${avgReduction > 0 ? '-' : '+'}${Math.abs(avgReduction).toFixed(2)}%`;
 
         document.getElementById('statisticsLabel').innerHTML = text;
+        document.getElementById('statisticsContainer').classList.add('active');
     }
 
     async loadMedia() {
@@ -376,7 +408,6 @@ class OpenMediaManager {
             this.displayLog();
             const result = await Utils.API.scanMedia();
             this.mediaFiles = result.files || [];
-            console.log(this.mediaFiles);
             this.filteredFiles = this.mediaFiles;
             this.renderMediaTable();
 
@@ -1008,23 +1039,19 @@ class OpenMediaManager {
     }
 
     async startEncoding() {
-        console.log('startEncoding called');
         try {
             if (this.selectedFiles.size === 0) {
-                console.log('No files selected');
                 await Dialogs.alert('No Files Selected', 'Please select at least one file to encode');
                 return;
             }
 
             const count = this.selectedFiles.size;
-            console.log('Selected files count:', count);
             const confirmed = await Dialogs.confirm(
                 'Start Encoding',
                 `Encode ${count} selected file(s)?`
             );
 
             if (!confirmed) {
-                console.log('User cancelled confirm dialog');
                 return;
             }
 
@@ -1049,16 +1076,11 @@ class OpenMediaManager {
                 }
             });
 
-            console.log('Resolutions in batch:', Array.from(resolutionsInBatch));
-
             // Show encoding settings dialog
             const encodingDialog = new EncodingSettingsDialog(Array.from(resolutionsInBatch));
-            console.log('EncodingSettingsDialog created with resolutions:', resolutionsInBatch);
             const encodingSettings = await encodingDialog.show();
-            console.log('Encoding settings returned:', encodingSettings);
 
             if (!encodingSettings) {
-                console.log('User cancelled encoding settings dialog');
                 return;  // User cancelled
             }
 
@@ -1071,7 +1093,6 @@ class OpenMediaManager {
             this.displayLog();
 
             const result = await Utils.API.startEncoding(Array.from(this.selectedFiles), encodingSettings);
-            console.log('Encoding started:', result);
 
             this.isEncoding = true;
             document.getElementById('stopEncodingBtn').disabled = false;
@@ -1116,6 +1137,10 @@ class OpenMediaManager {
 
     addLogEntry(data) {
         Utils.Logger.add(data.log_type || 'info', data.message, data.color);
+        // If there are previous statistics and we're not encoding, show them
+        if (!this.isEncoding && this.encodingLogState && this.encodingLogState.fileStats && this.encodingLogState.fileStats.length > 0) {
+            this.updateStatistics();
+        }
         this.displayLog();
     }
 
@@ -1153,9 +1178,12 @@ class OpenMediaManager {
     clearLog() {
         Utils.Logger.clear();
         this.displayLog();
-        document.getElementById('fileProgressContainer').classList.remove('active');
-        document.getElementById('batchProgressContainer').classList.remove('active');
-        document.getElementById('statisticsContainer').classList.remove('active');
+        // Only hide progress bars and statistics if encoding is NOT in progress
+        if (!this.isEncoding) {
+            document.getElementById('fileProgressContainer').classList.remove('active');
+            document.getElementById('batchProgressContainer').classList.remove('active');
+            document.getElementById('statisticsContainer').classList.remove('active');
+        }
     }
 
     showEncodingStoppedDialog(data) {

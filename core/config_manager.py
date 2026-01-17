@@ -4,10 +4,13 @@ Handles loading, saving, and managing application settings.
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .constants import DEFAULT_CONFIG as CONST_DEFAULT_CONFIG
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigManager:
@@ -61,7 +64,7 @@ class ConfigManager:
 
             return merged
         except (json.JSONDecodeError, IOError) as e:
-            print(f"Error loading config: {e}")
+            logger.error(f"Error loading config: {e}")
             return self.DEFAULT_CONFIG.copy()
 
     def save_config(self, config: Dict[str, Any]) -> bool:
@@ -82,7 +85,7 @@ class ConfigManager:
                 json.dump(config, f, indent=2)
             return True
         except IOError as e:
-            print(f"Error saving config: {e}")
+            logger.error(f"Error saving config: {e}")
             return False
 
     # ========== Last Encoding Settings ==========
@@ -103,7 +106,7 @@ class ConfigManager:
                 json.dump(encoding_settings, f, indent=2)
             return True
         except IOError as e:
-            print(f"Error saving last encoding settings: {e}")
+            logger.error(f"Error saving last encoding settings: {e}")
             return False
 
     def load_last_encoding_settings(self) -> Optional[Dict[str, Any]]:
@@ -120,7 +123,7 @@ class ConfigManager:
             with open(self.last_encoding_path, 'r') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError) as e:
-            print(f"Error loading last encoding settings: {e}")
+            logger.error(f"Error loading last encoding settings: {e}")
             return None
 
     # ========== Encoding Profiles ==========
@@ -139,7 +142,7 @@ class ConfigManager:
             with open(self.profiles_path, 'r') as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError) as e:
-            print(f"Error loading encoding profiles: {e}")
+            logger.error(f"Error loading encoding profiles: {e}")
             return {}
 
     def save_encoding_profile(self, name: str, settings: Dict[str, Any]) -> bool:
@@ -162,7 +165,7 @@ class ConfigManager:
                 json.dump(profiles, f, indent=2)
             return True
         except IOError as e:
-            print(f"Error saving encoding profile: {e}")
+            logger.error(f"Error saving encoding profile: {e}")
             return False
 
     def delete_encoding_profile(self, name: str) -> bool:
@@ -183,7 +186,7 @@ class ConfigManager:
                     json.dump(profiles, f, indent=2)
             return True
         except IOError as e:
-            print(f"Error deleting encoding profile: {e}")
+            logger.error(f"Error deleting encoding profile: {e}")
             return False
 
     def get_encoding_profile(self, name: str) -> Optional[Dict[str, Any]]:

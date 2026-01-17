@@ -5,7 +5,6 @@
 const Dialogs = {
     // Alert dialog
     async alert(title, message) {
-        console.log('Dialogs.alert called:', title, message);
         return new Promise((resolve) => {
             const dialog = document.getElementById('alertDialog');
             const dialogTitle = document.getElementById('alertTitle');
@@ -21,7 +20,6 @@ const Dialogs = {
             dialogTitle.textContent = title;
             dialogMessage.textContent = message;
             dialog.classList.add('active');
-            console.log('Alert dialog shown');
 
             const closeDialog = () => {
                 dialog.classList.remove('active');
@@ -35,7 +33,6 @@ const Dialogs = {
 
     // Confirm dialog
     async confirm(title, message) {
-        console.log('Dialogs.confirm called:', title, message);
         return new Promise((resolve) => {
             const dialog = document.getElementById('confirmDialog');
             const dialogTitle = document.getElementById('confirmTitle');
@@ -52,7 +49,7 @@ const Dialogs = {
             dialogTitle.textContent = title;
             dialogMessage.textContent = message;
             dialog.classList.add('active');
-            console.log('Confirm dialog shown');
+
 
             const closeDialog = (result) => {
                 dialog.classList.remove('active');
@@ -398,7 +395,6 @@ class EncodingSettingsDialog {
         try {
             const response = await Utils.API.getEncodingProfiles();
             this.presets = response.profiles || {};
-            console.log('[EncodingSettingsDialog] Loaded presets:', Object.keys(this.presets));
             this._populatePresetDropdown();
         } catch (error) {
             console.error('Failed to load encoding presets:', error);
@@ -482,7 +478,6 @@ class EncodingSettingsDialog {
         existingOptions.forEach(opt => opt.remove());
 
         const presetNames = Object.keys(this.presets);
-        console.log('[EncodingSettingsDialog] _populatePresetDropdown - adding', presetNames.length, 'presets:', presetNames);
 
         presetNames.forEach(name => {
             const option = document.createElement('option');

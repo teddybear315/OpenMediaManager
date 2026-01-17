@@ -191,7 +191,6 @@ class LogWebSocket {
                 this.ws = new WebSocket(finalUrl);
 
                 this.ws.onopen = () => {
-                    console.log('WebSocket connected');
                     this.reconnectAttempts = 0;
                     resolve();
                 };
@@ -211,7 +210,6 @@ class LogWebSocket {
                 };
 
                 this.ws.onclose = () => {
-                    console.log('WebSocket disconnected');
                     this.attemptReconnect();
                 };
             } catch (error) {
@@ -223,7 +221,6 @@ class LogWebSocket {
     attemptReconnect() {
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
-            console.log(`Reconnecting WebSocket (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
             setTimeout(() => this.connect(), this.reconnectDelay);
         }
     }
@@ -273,7 +270,11 @@ const Logger = {
         const timeHtml = `<span class="log-entry timestamp">[${timestamp}]</span>`;
         // Convert newlines to <br> tags and escape HTML
         const escapedMessage = escapeHtml(message).replace(/\n/g, '<br>');
-        const contentHtml = `<span class="log-entry ${type}" style="color: ${color}">${escapedMessage}</span>`;
+
+        // Use provided color, or default to inherit if not specified
+        let finalColor = color || 'inherit';
+
+        const contentHtml = `<span class="log-entry ${type}" style="color: ${finalColor}">${escapedMessage}</span>`;
         return `<div class="log-line">${timeHtml} ${contentHtml}</div>`;
     },
 
